@@ -146,7 +146,7 @@ export declare class SplatPager {
     }[];
     packedTexture: dyno.DynoUsampler2DArray<"packedTexture", THREE.DataArrayTexture>;
     extTexture: dyno.DynoUsampler2DArray<"extTexture", THREE.DataArrayTexture>;
-    highlightLabel: dyno.DynoInt<"highlightLabel">;
+    highlightTexture: dyno.DynoUsampler2D<'highlight', THREE.DataTexture>;
     lookUpTexture: dyno.DynoUsampler2D<'lookup', THREE.DataTexture>;
     labelTexture: dyno.DynoUsampler2DArray<"label", THREE.DataArrayTexture>;
     instanceTexture: dyno.DynoUsampler2DArray<"instance", THREE.DataArrayTexture>;
@@ -155,7 +155,7 @@ export declare class SplatPager {
         lookup: 'usampler2D';
         label: 'usampler2DArray';
         instance: 'usampler2DArray';
-        highlightLabel: 'int';
+        highlight: 'usampler2D';
     }, {
         gsplat: typeof dyno.Gsplat;
     }>;
@@ -204,9 +204,9 @@ export declare class SplatPager {
     constructor(options: SplatPagerOptions);
     dispose(): void;
     updateLabelLookup(categories: Set<number>): void;
+    updateLabelHighlight(categories: Set<number>): void;
     private newUintArrayTex;
     private ensureLabelTextures;
-    updateLabelHighlight(id: number): void;
     private ensureInstanceTextures;
     private ensureShTextures;
     private allocatePage;

@@ -564,7 +564,7 @@ export class SplatPager {
   >;
   extTexture: dyno.DynoUsampler2DArray<"extTexture", THREE.DataArrayTexture>;
 
-  highlightLabel: dyno.DynoInt<"highlightLabel">;
+  highlightTexture: dyno.DynoUsampler2D<'highlight', THREE.DataTexture>;
   lookUpTexture: dyno.DynoUsampler2D<'lookup', THREE.DataTexture>;
   labelTexture: dyno.DynoUsampler2DArray<"label", THREE.DataArrayTexture>;
   instanceTexture: dyno.DynoUsampler2DArray<"instance", THREE.DataArrayTexture>;
@@ -574,7 +574,7 @@ export class SplatPager {
     lookup: 'usampler2D', 
     label: 'usampler2DArray', 
     instance: 'usampler2DArray', 
-    highlightLabel: 'int'
+    highlight: 'usampler2D'
   },
   { gsplat: typeof dyno.Gsplat }
   >
@@ -661,7 +661,18 @@ export class SplatPager {
         }),
     ) as typeof this.shTextures;
 
-    this.highlightLabel = new dyno.DynoInt({ key: 'highlightLabel', value: -1 }); 
+    this.highlightTexture = new dyno.DynoUsampler2D({
+      value: new THREE.DataTexture(
+        new Uint32Array(256), 
+        256, 1,
+        THREE.RedIntegerFormat,
+        THREE.UnsignedIntType,
+      )
+    });
+    this.highlightTexture.value.image.data.fill(0);
+    this.highlightTexture.value.needsUpdate = true;
+    this.renderer.initTexture(this.highlightTexture.value);
+
     this.lookUpTexture = new dyno.DynoUsampler2D({
       value: new THREE.DataTexture(
         new Uint32Array(256), 
@@ -688,14 +699,14 @@ export class SplatPager {
           lookup: 'usampler2D', 
           label: 'usampler2DArray',
           instance: 'usampler2DArray',
-          highlightLabel: 'int'
+          highlight: 'usampler2D'
         },
         outTypes: { gsplat: dyno.Gsplat },
         inputs: { 
           lookup: this.lookUpTexture, 
           label: this.labelTexture,
           instance: this.instanceTexture,
-          highlightLabel: this.highlightLabel
+          highlight: this.highlightTexture
         },
         globals: () => [
           randomColourFromID,
@@ -709,15 +720,16 @@ export class SplatPager {
           uint visible = texelFetch(${inputs.lookup}, ivec2(labelTexel.r, 0), 0).r;
           if (visible == 0u) { g.flags &= ~GSPLAT_FLAG_ACTIVE; }
 
-          if (${inputs.highlightLabel} >= 0 && labelTexel.r == uint(${inputs.highlightLabel})) {
-            uvec4 instanceTexel = texelFetch(${inputs.instance}, splatCoord, 0);
+          uvec4 instanceTexel = texelFetch(${inputs.instance}, splatCoord, 0);
+          uint highlighted = texelFetch(${inputs.highlight}, ivec2(labelTexel.r, 0), 0).r;
+          if (highlighted == 1u) {
             vec4 splatColour = getDeterministicColor(instanceTexel.r);
             g.rgba = mix(g.rgba, splatColour, 0.6);
           }
 
           ${outputs.gsplat} = g;
         `), 
-      }); //DynoUniform
+      }); //DynoUniform if (instanceTexel.r > uint(0) && ${inputs.highlightLabel} > 0 && labelTexel.r == uint(${inputs.highlightLabel})) {
 
 
     this.readIndex = dyno.dynoBlock(
@@ -954,6 +966,15 @@ export class SplatPager {
     this.lookUpTexture.value.needsUpdate = true;
   }
 
+  public updateLabelHighlight(categories: Set<number>) {
+    const array = this.highlightTexture.value.image.data;
+    array.fill(0);
+    categories.forEach(id => {
+      if (id >= 0 && id < 256) array[id] = 1;
+    });
+    this.highlightTexture.value.needsUpdate = true;
+  }
+
   private newUintArrayTex(
     data: Uint32Array<ArrayBuffer> | null,
     width: number,
@@ -986,9 +1007,6 @@ export class SplatPager {
     }
   }
 
-  public updateLabelHighlight(id: number) {
-    this.highlightLabel.value = id
-  }
 
   private ensureInstanceTextures() {
     if (this.instanceTexture.value === SplatPager.emptyLabelTexture) {
@@ -1135,7 +1153,6 @@ export class SplatPager {
     // In case of extSplats there can be 4 shArrays for 3 sh degrees
     const numSh = Math.min(shArrays.length, 3);
     this.ensureShTextures(numSh);
-
     if ( labels !== undefined ) {
       this.ensureLabelTextures();
       const labels_arr = labels as Uint32Array<ArrayBuffer>;

@@ -450,9 +450,9 @@ export class SplatMesh extends SplatGenerator {
     }
   }
 
-  public updateLabelHighlight(id: number) {
+  public updateLabelHighlight(categories: Set<number>) {
     if (this.paged) {
-      this.paged.pager?.updateLabelHighlight(id);
+      this.paged.pager?.updateLabelHighlight(categories);
     }
   }
 
@@ -728,7 +728,7 @@ export class SplatMesh extends SplatGenerator {
             gsplat = modifier.apply({ gsplat }).gsplat;
           }
         }
-
+        
         if (this.paged?.pager?.labelLookupModifier) {
           gsplat = this.paged?.pager?.labelLookupModifier.apply({ gsplat }).gsplat;
         }
