@@ -723,13 +723,13 @@ export class SplatPager {
           uvec4 instanceTexel = texelFetch(${inputs.instance}, splatCoord, 0);
           uint highlighted = texelFetch(${inputs.highlight}, ivec2(labelTexel.r, 0), 0).r;
           if (highlighted == 1u) {
-            vec4 splatColour = getDeterministicColor(instanceTexel.r);
+            vec4 splatColour = getDeterministicColor(instanceTexel.r, float(g.rgba.a));
             g.rgba = mix(g.rgba, splatColour, 0.6);
           }
 
           ${outputs.gsplat} = g;
         `), 
-      }); //DynoUniform if (instanceTexel.r > uint(0) && ${inputs.highlightLabel} > 0 && labelTexel.r == uint(${inputs.highlightLabel})) {
+      });
 
 
     this.readIndex = dyno.dynoBlock(

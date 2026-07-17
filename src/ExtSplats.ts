@@ -854,10 +854,10 @@ vec3 hsl2rgb(vec3 c) {
     return c.z + c.y * (rgb - 0.5) * (1.0 - abs(2.0 * c.z - 1.0));
 }
 
-vec4 getDeterministicColor(uint id) {
+vec4 getDeterministicColor(uint id, float alpha) {
   float hue = fract(float(id) * 0.618033988749895);
   vec3 rgb = hsl2rgb(vec3(hue, 0.9, 0.6));
-  return vec4(rgb, 1.0);
+  return vec4(rgb, alpha);
 }
 `);
 
