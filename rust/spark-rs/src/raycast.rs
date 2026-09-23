@@ -1,6 +1,6 @@
 use spark_lib::{
     decoder::SplatEncoding,
-    splat_encode::{decode_ext_splat_center, decode_ext_splat_opacity, decode_ext_splat_quat, decode_ext_splat_scale, decode_packed_splat_center, decode_packed_splat_opacity, decode_packed_splat_quat, decode_packed_splat_scale},
+    splat_encode::{decode_ext_splat_center, decode_ext_splat_opacity, decode_ext_splat_quat, decode_ext_splat_scale, decode_ext_splat_scale_raycast, decode_packed_splat_center, decode_packed_splat_opacity, decode_packed_splat_quat, decode_packed_splat_scale},
 };
 
 pub fn raycast_packed_ellipsoids(
@@ -62,6 +62,13 @@ fn raycast_ellipsoid(
     let scale = scale.map(|s| s * rescale);
 
     let min_scale = scale[0].max(scale[1]).max(scale[2]) * 0.01;
+
+    
+    let thin_count = [scale[0], scale[1], scale[2]].iter().filter(|&&s| s < min_scale).count();
+    if thin_count >= 2 {
+        web_sys::console::log_1(&format!("needle splat: scale={:?}", scale).into());
+    }
+
     if scale[2] < min_scale {
         // Treat it as a flat elliptical disk
         if local_dir[2].abs() < 1e-6 {

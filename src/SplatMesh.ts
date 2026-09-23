@@ -1115,6 +1115,14 @@ export class SplatMesh extends SplatGenerator {
         : indices
           ? this.extSplats?.lodSplats?.extArrays[1]
           : this.extSplats?.extArrays[1];
+
+      const labels = paged 
+        ? (this.paged?.pager?.labelTexture.value.image.data as Uint32Array) 
+        : undefined;
+      const labelsLookUp = paged 
+      ? (this.paged?.pager?.lookUpTexture.value.image.data as Uint32Array) 
+      : undefined;
+
       if (!ext1 || !ext2) {
         return;
       }
@@ -1132,10 +1140,19 @@ export class SplatMesh extends SplatGenerator {
             buffer[i4 + 1] = ext1[index4 + 1];
             buffer[i4 + 2] = ext1[index4 + 2];
             buffer[i4 + 3] = ext1[index4 + 3];
+
             buffer2[i4] = ext2[index4];
             buffer2[i4 + 1] = ext2[index4 + 1];
             buffer2[i4 + 2] = ext2[index4 + 2];
             buffer2[i4 + 3] = ext2[index4 + 3];
+
+            if (labels !== undefined && labelsLookUp !== undefined) {
+              const label = labels[index];
+              const visible = labelsLookUp[label] > 0;
+              if (!visible) {
+                buffer[i4 + 3] = 0;
+              }
+            }
           }
         }
 

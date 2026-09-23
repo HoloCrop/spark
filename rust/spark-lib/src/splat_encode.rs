@@ -183,6 +183,12 @@ pub fn decode_ext_splat_scale(ext_b: &[u32]) -> [f32; 3] {
         .map(|x| f16::from_bits(x as u16).to_f32().exp())
 }
 
+pub fn decode_ext_splat_scale_raycast(ext_b: &[u32]) -> [f32; 3] {
+    const MIN_RAYCAST_SCALE: f32 = 1e-3; // floor for hit-testing only, doesn't affect rendering
+    [(ext_b[1] >> 16) as u16, ext_b[2] as u16, (ext_b[2] >> 16) as u16]
+        .map(|x| f16::from_bits(x as u16).to_f32().exp().max(MIN_RAYCAST_SCALE))
+}
+
 pub fn encode_ext_splat_quat(ext_b: &mut [u32], quat_xyzw: [f32; 4]) {
     ext_b[3] = encode_quat_oct101012(quat_xyzw);
 }
