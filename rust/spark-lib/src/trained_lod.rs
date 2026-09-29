@@ -280,8 +280,6 @@ fn encode_arrays_inner(
     }
     let mut encoder = RadEncoder::new(splats);
     encoder.lod_sizes = lod_sizes;
-    #[cfg(feature = "native-zstd")]
-    { encoder.compression = crate::rad::RadChunkPropertyCompression::Zstd; }
     encoder.resolve_encoding();
     let prepared = started.elapsed();
     let mut header = Vec::new();
