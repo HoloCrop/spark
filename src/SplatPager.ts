@@ -1029,7 +1029,8 @@ export class SplatPager {
     const emptyShTextures = this.extSplats
       ? SplatPager.emptyExtShTextures
       : SplatPager.emptyShTextures;
-    for (let i = 0; i < this.curSh; i++) {
+    const numTextures = this.curSh + (this.extSplats && this.curSh === 3 ? 1 : 0);
+    for (let i = 0; i < numTextures; i++) {
       if (this.shTextures[i].value === emptyShTextures[i]) {
         const elementsPerSplat =
           this.shTextures[i].value === SplatPager.emptyUint32x2 ? 2 : 4;
@@ -1355,7 +1356,7 @@ export class SplatPager {
           data.extra.sh3a as Uint32Array,
           data.extra.sh3b as Uint32Array,
         ];
-        shArrays.length = shArrays.findIndex((sh) => !sh);
+        shArrays.length = shArrays.filter(Boolean).length;
         this.newUploads.push({
           page,
           numSplats,
@@ -1372,7 +1373,7 @@ export class SplatPager {
           data.extra.sh2 as Uint32Array,
           data.extra.sh3 as Uint32Array,
         ];
-        shArrays.length = shArrays.findIndex((sh) => !sh);
+        shArrays.length = shArrays.filter(Boolean).length;
         this.newUploads.push({
           page,
           numSplats,
