@@ -364,7 +364,7 @@ fn batch_recurse<TA: TsplatArray>(splats: &mut TA, indices: &mut Vec<usize>, bat
                 .map(|(_, parent)| parent).partition(|&parent| {
                     axis.get_vec3(splats.get(parent).center()) < split
                 });
-            println!("split axis={:?}, extent={:?}, split={}, a.len={}, b.len={}", axis, aabb.extent(), split, a.len(), b.len());
+            log::debug!("split axis={:?}, extent={:?}, split={}, a.len={}, b.len={}", axis, aabb.extent(), split, a.len(), b.len());
 
             let mut batches = [a, b];
             batches.sort_by_key(|b| b.len());
@@ -387,7 +387,7 @@ fn batch_recurse<TA: TsplatArray>(splats: &mut TA, indices: &mut Vec<usize>, bat
 
         octants.sort_by_key(|o| o.len());
 
-        println!("octant lengths: {:?}", octants.iter().map(|o| o.len()).collect::<Vec<usize>>());
+        log::debug!("octant lengths: {:?}", octants.iter().map(|o| o.len()).collect::<Vec<usize>>());
 
         for batch in octants {
             batch_recurse(splats, indices, &batch, logger);
@@ -453,7 +453,7 @@ pub fn chunk_tree_size<TA: TsplatArray>(splats: &mut TA, root: usize, logger: im
                     .map(|(_, parent)| parent).partition(|&parent| {
                         axis.get_vec3(splats.get(parent).center()) < split
                     });
-                println!("split axis={:?}, extent={:?}, split={}, a.len={}, b.len={}", axis, aabb.extent(), split, a.len(), b.len());
+                log::debug!("split axis={:?}, extent={:?}, split={}, a.len={}, b.len={}", axis, aabb.extent(), split, a.len(), b.len());
     
                 let mut new_batches = [a, b];
                 new_batches.sort_by_key(|b| -(b.len() as isize));
@@ -474,7 +474,7 @@ pub fn chunk_tree_size<TA: TsplatArray>(splats: &mut TA, root: usize, logger: im
                 octants[octant].push(parent);
             }
     
-            println!("octant lengths: {:?}", octants.iter().map(|o| o.len()).collect::<Vec<usize>>());
+            log::debug!("octant lengths: {:?}", octants.iter().map(|o| o.len()).collect::<Vec<usize>>());
             
             // Resort into Hilbert order
             let mut octants = octants.into_iter().map(|o| Some(o)).collect::<Vec<_>>();
@@ -614,7 +614,7 @@ pub fn chunk_tree_morton<TA: TsplatArray>(splats: &mut TA, root: usize, logger: 
                     .partition(|&parent| {
                         axis.get_vec3(splats.get(parent).center()) < split
                     });
-                println!("split axis={:?}, extent={:?}, split={}, a.len={}, b.len={}", axis, aabb.extent(), split, a.len(), b.len());
+                log::debug!("split axis={:?}, extent={:?}, split={}, a.len={}, b.len={}", axis, aabb.extent(), split, a.len(), b.len());
     
                 let mut new_batches = [a, b];
                 new_batches.sort_by_key(|b| -(b.len() as isize));
@@ -635,7 +635,7 @@ pub fn chunk_tree_morton<TA: TsplatArray>(splats: &mut TA, root: usize, logger: 
                 octants[octant].push(parent);
             }
     
-            println!("octant lengths: {:?}", octants.iter().map(|o| o.len()).collect::<Vec<usize>>());
+            log::debug!("octant lengths: {:?}", octants.iter().map(|o| o.len()).collect::<Vec<usize>>());
             
             // Resort into Hilbert order
             let mut octants = octants.into_iter().map(|o| Some(o)).collect::<Vec<_>>();
