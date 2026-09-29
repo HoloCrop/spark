@@ -545,18 +545,37 @@ impl TsplatArray for GsplatArray {
     fn permute(&mut self, index_map: &[usize]) {
         assert_eq!(index_map.len(), self.splats.len());
         let swaps = compute_swaps(index_map);
-        apply_swaps(&mut self.splats, &swaps);
-        if !self.children.is_empty() {
-            apply_swaps(&mut self.children, &swaps);
-        }
-        if !self.sh1.is_empty() {
-            apply_swaps(&mut self.sh1, &swaps);
-        }
-        if !self.sh2.is_empty() {
-            apply_swaps(&mut self.sh2, &swaps);
-        }
-        if !self.sh3.is_empty() {
-            apply_swaps(&mut self.sh3, &swaps);
+        #[cfg(feature = "parallel")]
+        rayon::scope(|scope| {
+            scope.spawn(|_| apply_swaps(&mut self.splats, &swaps));
+            if !self.children.is_empty() {
+                scope.spawn(|_| apply_swaps(&mut self.children, &swaps));
+            }
+            if !self.sh1.is_empty() {
+                scope.spawn(|_| apply_swaps(&mut self.sh1, &swaps));
+            }
+            if !self.sh2.is_empty() {
+                scope.spawn(|_| apply_swaps(&mut self.sh2, &swaps));
+            }
+            if !self.sh3.is_empty() {
+                scope.spawn(|_| apply_swaps(&mut self.sh3, &swaps));
+            }
+        });
+        #[cfg(not(feature = "parallel"))]
+        {
+            apply_swaps(&mut self.splats, &swaps);
+            if !self.children.is_empty() {
+                apply_swaps(&mut self.children, &swaps);
+            }
+            if !self.sh1.is_empty() {
+                apply_swaps(&mut self.sh1, &swaps);
+            }
+            if !self.sh2.is_empty() {
+                apply_swaps(&mut self.sh2, &swaps);
+            }
+            if !self.sh3.is_empty() {
+                apply_swaps(&mut self.sh3, &swaps);
+            }
         }
     }
 

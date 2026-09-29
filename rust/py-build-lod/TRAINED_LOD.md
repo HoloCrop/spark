@@ -1,22 +1,35 @@
 # Trained RAD levels
 
-`encode_trained_rad(directory, output_dir, levels, moment_factor, resolution_factor)`
-encodes `level-1/point_cloud.ply` through `level-N/point_cloud.ply`.
-`parents-L.bin` is a little-endian u32 array mapping each row of level L to a row
-of level L+1. These are actual merge memberships, not nearest-center links.
-The encoder retains all trained nodes and creates semantic spatial ancestors
+`TrainedLevel(position, rotation, log_scaling, alpha_logit, sh_feature, labels)`
+accepts Python buffers directly: float32 positions (N,3), xyzw quaternions (N,4),
+log scales (N,3), opacity logits (N,1), RGB-major SH3 coefficients (N,3,16), and
+int32 class/instance labels (N,2). Labels use -1 for unknown; zero is a real ID.
+
+`encode_trained_arrays(levels, parents, output_dir, moment_factor, resolution_factor)`
+encodes levels in finest-to-coarsest order. Each uint32 parent buffer maps a row
+of one level to its parent in the next level. Inputs remain in memory; the encoder
+writes only `bay-lod.rad` and its `bay-lod-*.radc` chunks. There are no temporary
+PLYs, binary mappings, or intermediate serialized representations.
+
+`encode_trained_archive(levels, parents, output_file, moment_factor, resolution_factor)`
+uses the same encoder and writes the chunks directly into a stored ZIP. The pipeline
+uses this entry point so only the final upload archive reaches the filesystem.
+
+The pipeline crops finished levels on the GPU before copying them to CPU memory.
+It retains actual ancestors and remaps their child ownership, preserving labels.
+The encoder retains every trained node and creates semantic spatial ancestors
 above the final trained level. `moment_factor` converts projected kernel shape
 to second moments (1 for k=1, 1/sqrt(2*pi) for k=2).
 
-The output is `bay-lod.rad` and its `bay-lod-*.radc` chunks, including class and
-instance properties. PLY label numbering is retained; instance IDs become ID+1
-for the frontend, with zero representing unknown.
+Class and instance IDs become ID+1 for the frontend, with zero representing unknown.
+The independent `lod_size` property preserves all trained level transitions,
+without inflating rendered geometry.
 
-The optional `lod_size` f32 RAD property separates selection bounds from rendered
-scales. Bounds contain descendants and maintain distinct trained-level intervals.
-Both packed and extended WASM decoders use these sizes for traversal; older RADs
-without this property retain their geometry-derived bounds. Deploy this decoder
-with the new encoder. The rendered scales and opacity are not inflated.
+The native encoder uses zstd level 3 with bounded parallel property compression.
+The Rust/WASM decoder supports both zstd and existing DEFLATE properties. Deploy
+the matching viewer build before publishing zstd RADs. Upload ZIPs should store
+RAD chunks without compressing them again.
 
-The CropVision pipeline's `test_trained_rad.py` covers exported level retention,
-f16 selection ordering and class/instance ID round trips through the encoder.
+`encode_trained_rad` remains available for file-based tools. Both interfaces share
+the same hierarchy assembly and encoder. Pipeline tests compare all encoded
+properties and protect ancestry, SH layout, k=2 selection bounds and label IDs.

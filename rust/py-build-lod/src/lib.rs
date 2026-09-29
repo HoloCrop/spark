@@ -1,8 +1,11 @@
+mod trained;
 use pyo3::prelude::*;
 
 
 #[pymodule]
 mod py_build_lod {
+    #[pymodule_export]
+    use crate::trained::{TrainedLevel, encode_trained_arrays, encode_trained_archive};
     use pyo3::prelude::*;
     use pyo3::exceptions::PyValueError;
     use spark_lib::decoder::SplatGetter;

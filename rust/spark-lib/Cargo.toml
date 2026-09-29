@@ -8,6 +8,9 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+ruzstd = "0.8"
+zstd = { version = "0.13", optional = true }
+rayon = { version = "1.11", optional = true }
 ahash.workspace = true
 anyhow.workspace = true
 glam.workspace = true
@@ -27,3 +30,7 @@ log = "0.4.32"
 env_logger = "0.11.10"
 serde_path_to_error = "0.1.20"
 strum_macros = "0.28.0"
+
+[features]
+native-zstd = ["dep:zstd"]
+parallel = ["dep:rayon"]

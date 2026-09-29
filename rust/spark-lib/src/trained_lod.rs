@@ -8,6 +8,36 @@ use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
+use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+
+pub enum RadOutput<'a> {
+    Directory(&'a Path),
+    Archive(&'a Path),
+}
+
+impl RadOutput<'_> {
+    fn write(self, header: Vec<u8>, chunks: Vec<(String, Vec<u8>)>) -> anyhow::Result<()> {
+        let files = std::iter::once(("bay-lod.rad".to_owned(), header)).chain(chunks);
+        match self {
+            Self::Directory(path) => {
+                fs::create_dir_all(path)?;
+                for (name, bytes) in files {
+                    fs::write(path.join(name), bytes)?;
+                }
+            }
+            Self::Archive(path) => {
+                let mut archive = ZipWriter::new(BufWriter::new(File::create(path)?));
+                let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+                for (name, bytes) in files {
+                    archive.start_file(name, options)?;
+                    archive.write_all(&bytes)?;
+                }
+                archive.finish()?.flush()?;
+            }
+        }
+        Ok(())
+    }
+}
 
 fn read(path: &Path) -> anyhow::Result<GsplatArray> {
     let name = path.to_str().unwrap();
@@ -132,7 +162,34 @@ pub fn encode_levels(
     resolution_factor: f32,
 ) -> anyhow::Result<()> {
     anyhow::ensure!(levels > 0, "at least one trained level is required");
-    let mut splats = read(&directory.join(format!("level-{levels}/point_cloud.ply")))?;
+    let clouds = (1..=levels).map(|level| read(&directory.join(format!("level-{level}/point_cloud.ply"))))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let parents = (1..levels).map(|level| {
+        let bytes = fs::read(directory.join(format!("parents-{level}.bin")))?;
+        Ok(bytes.chunks_exact(4).map(|word| u32::from_le_bytes(word.try_into().unwrap())).collect())
+    }).collect::<anyhow::Result<Vec<Vec<u32>>>>()?;
+    encode_arrays(clouds, parents, RadOutput::Directory(output), moment_factor, resolution_factor)
+}
+
+pub fn encode_arrays(
+    clouds: Vec<GsplatArray>, parents: Vec<Vec<u32>>, output: RadOutput<'_>,
+    moment_factor: f32, resolution_factor: f32,
+) -> anyhow::Result<()> {
+    #[cfg(feature = "parallel")]
+    { rayon::ThreadPoolBuilder::new().num_threads(16).build()?.install(||
+        encode_arrays_inner(clouds, parents, output, moment_factor, resolution_factor)) }
+    #[cfg(not(feature = "parallel"))]
+    { encode_arrays_inner(clouds, parents, output, moment_factor, resolution_factor) }
+}
+
+fn encode_arrays_inner(
+    mut clouds: Vec<GsplatArray>, parents: Vec<Vec<u32>>, output: RadOutput<'_>,
+    moment_factor: f32, resolution_factor: f32,
+) -> anyhow::Result<()> {
+    let started = std::time::Instant::now();
+    let levels = clouds.len();
+    anyhow::ensure!(levels > 0 && parents.len() == levels - 1, "one parent map per level transition required");
+    let mut splats = clouds.pop().unwrap();
     let original_scales: Vec<_> = splats.splats.iter().map(|s| s.ln_scales).collect();
     let moment_scale = moment_factor.sqrt();
     for mut splat in &mut splats.splats {
@@ -160,13 +217,12 @@ pub fn encode_levels(
         .collect();
     let mut leaf_count = original_scales.len();
     for level in (1..levels).rev() {
-        let path = directory.join(format!("level-{level}/point_cloud.ply"));
-        let mut fine = read(&path)?;
+        let mut fine = clouds.pop().unwrap();
         leaf_count = fine.len();
         let start = splats.len();
-        let bytes = fs::read(directory.join(format!("parents-{level}.bin")))?;
+        let mapping = &parents[level - 1];
         anyhow::ensure!(
-            bytes.len() == fine.len() * 4,
+            mapping.len() == fine.len(),
             "parent map length differs from input"
         );
         splats.splats.append(&mut fine.splats);
@@ -174,8 +230,9 @@ pub fn encode_levels(
         splats.sh2.append(&mut fine.sh2);
         splats.sh3.append(&mut fine.sh3);
         splats.prepare_children();
-        for (child, word) in bytes.chunks_exact(4).enumerate() {
-            let parent = u32::from_le_bytes(word.try_into().unwrap()) as usize;
+        for (child, &parent) in mapping.iter().enumerate() {
+            let parent = parent as usize;
+            anyhow::ensure!(parent < coarse_indices.len(), "parent index out of bounds");
             splats.children[coarse_indices[parent]].push(start + child);
         }
         assert!(coarse_indices
@@ -185,7 +242,9 @@ pub fn encode_levels(
         println!("Attached level {level}: {leaf_count} splats");
     }
     verify(&splats, leaf_count);
+    let attached = started.elapsed();
     chunk_tree::chunk_tree(&mut splats, 0, |_| {});
+    let chunked = started.elapsed();
     verify(&splats, leaf_count);
     println!(
         "Validated {} nodes, {} finest leaves",
@@ -221,12 +280,15 @@ pub fn encode_levels(
     }
     let mut encoder = RadEncoder::new(splats);
     encoder.lod_sizes = lod_sizes;
+    #[cfg(feature = "native-zstd")]
+    { encoder.compression = crate::rad::RadChunkPropertyCompression::Zstd; }
     encoder.resolve_encoding();
-    fs::create_dir_all(&output)?;
-    let mut writer = BufWriter::new(File::create(output.join("bay-lod.rad"))?);
-    for (name, bytes) in encoder.encode_with_chunks(&mut writer, "bay-lod-")? {
-        fs::write(output.join(name), bytes)?;
-    }
-    writer.flush()?;
+    let prepared = started.elapsed();
+    let mut header = Vec::new();
+    let chunks = encoder.encode_with_chunks(&mut header, "bay-lod-")?;
+    output.write(header, chunks)?;
+    println!("RAD: attach={:.3}s chunk={:.3}s bounds={:.3}s encode/write={:.3}s total={:.3}s",
+        attached.as_secs_f64(), (chunked-attached).as_secs_f64(),
+        (prepared-chunked).as_secs_f64(), (started.elapsed()-prepared).as_secs_f64(), started.elapsed().as_secs_f64());
     Ok(())
 }
