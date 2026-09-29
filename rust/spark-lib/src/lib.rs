@@ -223,3 +223,5 @@ mod ply_tests {
         for i in 0..15 { assert!(approx(got2[i], sh2_vals[i], 3e-4), "sh2[{}] {} vs {}", i, got2[i], sh2_vals[i]); }
     }
 }
+
+pub mod trained_lod;

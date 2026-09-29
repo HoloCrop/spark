@@ -34,6 +34,7 @@ pub struct ExtSplatsData {
     sh3_codes: [Vec<u32>; 2],
     pub lod_tree: Option<Uint32Array>,
     child_counts: Option<Vec<u16>>,
+    lod_sizes: Vec<f32>,
     child_starts: Option<Vec<u32>>,
     buffer_a: Vec<u32>,
     buffer_b: Vec<u32>,
@@ -64,6 +65,7 @@ impl ExtSplatsData {
             sh3_codes: [Vec::new(), Vec::new()],
             lod_tree: None,
             child_counts: None,
+            lod_sizes: Vec::new(),
             child_starts: None,
             buffer_a: Vec::new(),
             buffer_b: Vec::new(),
@@ -431,7 +433,7 @@ impl SplatReceiver for ExtSplatsData {
             const MAX_SPLAT_CHUNK: usize = 65536;
             self.ensure_buffers(MAX_SPLAT_CHUNK);
             self.lod_tree = Some(Uint32Array::new_with_length((self.num_splats * 4) as u32));
-            let Self { buffer_a, buffer_b, ext_arrays, lod_tree, child_counts, child_starts, .. } = self;
+            let Self { buffer_a, buffer_b, ext_arrays, lod_tree, child_counts, child_starts, lod_sizes, .. } = self;
             let lod_tree = lod_tree.as_mut().unwrap();
             let child_counts = child_counts.as_ref().unwrap();
             let child_starts = child_starts.as_ref().unwrap();
@@ -452,6 +454,10 @@ impl SplatReceiver for ExtSplatsData {
                     let child_count = child_counts[base + i];
                     let child_start = child_starts[base + i];
                     encode_lod_tree(&mut buffer_a[i4..i4 + 4], &center, opacity, &scale, child_count, child_start);
+                    if !lod_sizes.is_empty() {
+                        let size = half::f16::from_f32(lod_sizes[base+i]).to_bits() as u32;
+                        buffer_a[i4+1] = (buffer_a[i4+1] & 0xffff) | (size << 16);
+                    }
                 }
                 lod_tree.subarray((base * 4) as u32, ((base + count) * 4) as u32).copy_from(buffer_a);
                 base += count;
@@ -848,6 +854,11 @@ impl SplatReceiver for ExtSplatsData {
                 }
             }
         }
+    }
+
+    fn set_lod_size(&mut self, base: usize, count: usize, sizes: &[f32]) {
+        self.lod_sizes.resize(self.num_splats, 0.0);
+        self.lod_sizes[base..base+count].copy_from_slice(sizes);
     }
 
     fn set_child_count(&mut self, base: usize, count: usize, child_count: &[u16]) {
