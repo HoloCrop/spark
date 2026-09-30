@@ -12,3 +12,10 @@ def encode_trained_arrays(levels: Sequence[TrainedLevel], parents: Sequence[Buff
 
 def encode_trained_archive(levels: Sequence[TrainedLevel], parents: Sequence[Buffer],
                            output_file: str, moment_factor: float) -> None: ...
+
+class MergedLevel:
+    def __init__(self, position: Buffer, rotation: Buffer, scales: Buffer,
+                 opacity: Buffer, labels: Buffer, right_weight: Buffer) -> None: ...
+
+def encode_merged_arrays(leaves: TrainedLevel, parents: MergedLevel, children: Buffer,
+                         output_dir: str, lod_base: float) -> None: ...

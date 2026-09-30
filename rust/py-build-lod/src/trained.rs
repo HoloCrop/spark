@@ -32,7 +32,7 @@ impl TrainedLevel {
 }
 
 impl TrainedLevel {
-    fn splats(&self, py: Python<'_>) -> PyResult<GsplatArray> {
+    pub(crate) fn splats(&self, py: Python<'_>) -> PyResult<GsplatArray> {
         let position = self.position.to_vec(py)?;
         let rotation = self.rotation.to_vec(py)?;
         let scales = self.log_scaling.to_vec(py)?;

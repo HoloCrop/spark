@@ -257,7 +257,7 @@ fn encode_arrays_inner(
     let mut header = Vec::new();
     let chunks = encoder.encode_with_chunks(&mut header, "bay-lod-")?;
     output.write(header, chunks)?;
-    println!("RAD: attach={:.3}s chunk={:.3}s bounds={:.3}s encode/write={:.3}s total={:.3}s",
+    println!("RAD: attach={:.3}s chunk={:.3}s prepare={:.3}s encode/write={:.3}s total={:.3}s",
         attached.as_secs_f64(), (chunked-attached).as_secs_f64(),
         (prepared-chunked).as_secs_f64(), (started.elapsed()-prepared).as_secs_f64(), started.elapsed().as_secs_f64());
     Ok(())

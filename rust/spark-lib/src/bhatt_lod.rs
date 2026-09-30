@@ -138,6 +138,11 @@ pub fn compute_lod_tree<TA: TsplatArray>(splats: &mut TA, lod_base: f32, logger:
         }
     }
 
+    prune_lod_tree(splats, initial_len, lod_base, logger);
+}
+
+/// Apply the same mass-based level selection to a precomputed chronological tree.
+pub fn prune_lod_tree<TA: TsplatArray>(splats: &mut TA, initial_len: usize, lod_base: f32, logger: impl Fn(&str)) {
     let root_index = splats.len() - 1;
     logger(&format!("Root index: {}", root_index));
     logger(&format!("Root splat: {:?}", splats.get(root_index)));
