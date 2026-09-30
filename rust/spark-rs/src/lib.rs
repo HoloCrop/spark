@@ -479,7 +479,7 @@ pub fn bhatt_lod_extsplats(num_splats: u32, ext1: Uint32Array, ext2: Uint32Array
     gs.to_extsplats_lod()
 }
 
-const RAYCAST_BUFFER_COUNT: usize = 65536;
+const RAYCAST_BUFFER_COUNT: usize = 2 * 65536;
 
 thread_local! {
     static RAYCAST_BUFFERS: RefCell<(Vec<u32>, Vec<u32>, Vec<f32>)> = RefCell::new((vec![0; RAYCAST_BUFFER_COUNT * 4], vec![0; RAYCAST_BUFFER_COUNT * 4], vec![0.0; RAYCAST_BUFFER_COUNT]));

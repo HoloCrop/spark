@@ -227,6 +227,40 @@ export class EmptySplatSource implements SplatSource {
   forEachSplat() {}
 }
 
+type Contribution = { t: number; alpha: number };
+
+// Contributions must have finite t and renderer-adjusted alpha in [0, 1].
+function medianDepth(
+  hits: Contribution[],
+  near: number,
+  far: number,
+): number | null {
+  hits.sort((a, b) => a.t - b.t);
+
+  let T = 1;
+
+  for (const hit of hits) {
+    if (hit.t < 0) continue;
+    if (hit.t > far) break;
+
+    T *= 1 - hit.alpha;
+
+    if (T <= 0.5) {
+      return hit.t >= near ? hit.t : null;
+    }
+  }
+
+  return null; // Total opacity never reached 50%.
+}
+
+function toContributions(intersections: ArrayLike<number>): Contribution[] {
+  const out: Contribution[] = new Array(intersections.length >> 1);
+  for (let i = 0, j = 0; i + 1 < intersections.length; i += 2, j++) {
+    out[j] = { t: intersections[i], alpha: intersections[i + 1] };
+  }
+  return out;
+}
+
 export class SplatMesh extends SplatGenerator {
   // A Promise<SplatMesh> you can await to ensure fetching, parsing,
   // and initialization has completed
@@ -1168,6 +1202,7 @@ export class SplatMesh extends SplatGenerator {
           far,
           count,
         );
+
         intersections = this.appendRaycastBuffer(
           intersections,
           newIntersections,
@@ -1175,17 +1210,16 @@ export class SplatMesh extends SplatGenerator {
       }
     }
 
-    for (const distance of SplatMesh.raycastBuffer.subarray(0, intersections)) {
-      const point = ray.direction
-        .clone()
-        .multiplyScalar(distance)
-        .add(ray.origin);
-      intersects.push({
-        distance,
-        point,
-        object: this,
-      });
-    }
+    const cs = toContributions(SplatMesh.raycastBuffer.subarray(0, intersections));
+    const distance = medianDepth(cs, near, far);
+    if ( distance === null ) return;
+
+    const point = ray.direction.clone().multiplyScalar(distance).add(ray.origin);
+    intersects.push({
+      distance,
+      point,
+      object: this,
+    });
   }
 
   static raycastBuffer = new Float32Array(1024);

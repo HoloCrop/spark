@@ -1,6 +1,6 @@
 use spark_lib::{
     decoder::SplatEncoding,
-    splat_encode::{decode_ext_splat_center, decode_ext_splat_opacity, decode_ext_splat_quat, decode_ext_splat_scale, decode_ext_splat_scale_raycast, decode_packed_splat_center, decode_packed_splat_opacity, decode_packed_splat_quat, decode_packed_splat_scale},
+    splat_encode::{decode_ext_splat_center, decode_ext_splat_opacity, decode_ext_splat_quat, decode_ext_splat_scale, decode_packed_splat_center, decode_packed_splat_opacity, decode_packed_splat_quat, decode_packed_splat_scale},
 };
 
 pub fn raycast_packed_ellipsoids(
@@ -17,7 +17,7 @@ pub fn raycast_packed_ellipsoids(
         let center = decode_packed_splat_center(packed);
         let scale = decode_packed_splat_scale(packed, encoding);
         let quat = decode_packed_splat_quat(packed);
-        if let Some(t) = raycast_ellipsoid(origin, dir, opacity, center, scale, quat) {
+        if let Some((t, alpha)) = raycast_ellipsoid(origin, dir, opacity, center, scale, quat) {
             if t >= near && t <= far {
                 distances.push(t);
             }
@@ -39,9 +39,9 @@ pub fn raycast_ext_ellipsoids(
         let center = decode_ext_splat_center(ext_a);
         let scale = decode_ext_splat_scale(ext_b);
         let quat = decode_ext_splat_quat(ext_b);
-        if let Some(t) = raycast_ellipsoid(origin, dir, opacity, center, scale, quat) {
+        if let Some((t, alpha)) = raycast_ellipsoid(origin, dir, opacity, center, scale, quat) {
             if t >= near && t <= far {
-                distances.push(t);
+                distances.extend_from_slice(&[t, alpha]);
             }
         }
     }
@@ -50,82 +50,47 @@ pub fn raycast_ext_ellipsoids(
 fn raycast_ellipsoid(
     origin: [f32; 3], dir: [f32; 3],
     opacity: f32, center: [f32; 3], scale: [f32; 3], quat: [f32; 4],
-) -> Option<f32> {
+) -> Option<(f32, f32)> {
     let origin = vec3_sub(origin, center);
     let inv_quat = [-quat[0], -quat[1], -quat[2], quat[3]];
 
-    // Model the Gsplat as an ellipsoid for higher quality raycasting
-    let local_origin = quat_vec(inv_quat, origin);
-    let local_dir = quat_vec(inv_quat, dir);
+    // u and v: origin and direction in rotated, inverse-scaled splat space.
+    let u = quat_vec(inv_quat, origin);
+    let v = quat_vec(inv_quat, dir);
+    let u = [u[0] / scale[0], u[1] / scale[1], u[2] / scale[2]];
+    let v = [v[0] / scale[0], v[1] / scale[1], v[2] / scale[2]];
 
-    let rescale = opacity.max(1.0) * 4.0 - 3.0;
-    let scale = scale.map(|s| s * rescale);
-
-    let min_scale = scale[0].max(scale[1]).max(scale[2]) * 0.01;
-
+    let vv = vec3_dot(v, v);
+    if vv <= 0.0 || !vv.is_finite() {
+        return None;
+    }
     
-    let thin_count = [scale[0], scale[1], scale[2]].iter().filter(|&&s| s < min_scale).count();
-    if thin_count >= 2 {
-        web_sys::console::log_1(&format!("needle splat: scale={:?}", scale).into());
+    let t = -vec3_dot(u, v) / vv;
+    let closest = [
+        u[0] + t * v[0],
+        u[1] + t * v[1],
+        u[2] + t * v[2],
+    ];
+    let q_perp = vec3_dot(closest, closest);
+    let alpha = apply_kernel_alpha(opacity, q_perp, 2.0, 1.0);
+    if alpha == 0.0 {
+        return None;
     }
 
-    if scale[2] < min_scale {
-        // Treat it as a flat elliptical disk
-        if local_dir[2].abs() < 1e-6 {
-            return None;
-        }
-        let t = -local_origin[2] / local_dir[2];
-        let p_x = local_origin[0] + t * local_dir[0];
-        let p_y = local_origin[1] + t * local_dir[1];
-        if sqr(p_x / scale[0]) + sqr(p_y / scale[1]) > 1.0 {
-            return None;
-        }
-        Some(t)
-    } else if scale[1] < min_scale {
-        // Treat it as a flat elliptical disk
-        if local_dir[1].abs() < 1e-6 {
-            return None;
-        }
-        let t = -local_origin[1] / local_dir[1];
-        let p_x = local_origin[0] + t * local_dir[0];
-        let p_z = local_origin[2] + t * local_dir[2];
-        if sqr(p_x / scale[0]) + sqr(p_z / scale[2]) > 1.0 {
-            return None;
-        }
-        Some(t)
-    } else if scale[0] < min_scale {
-        // Treat it as a flat elliptical disk
-        if local_dir[0].abs() < 1e-6 {
-            return None;
-        }
-        let t = -local_origin[0] / local_dir[0];
-        let p_y = local_origin[1] + t * local_dir[1];
-        let p_z = local_origin[2] + t * local_dir[2];
-        if sqr(p_y / scale[1]) + sqr(p_z / scale[2]) > 1.0 {
-            return None;
-        }
-        Some(t)
-    } else {
-        let inv_scale = [1.0 / scale[0], 1.0 / scale[1], 1.0 / scale[2]];
-        let local_origin = vec3_mul(local_origin, inv_scale);
-        let local_dir = vec3_mul(local_dir, inv_scale);
+    let qn = (quat[0]*quat[0] + quat[1]*quat[1] + quat[2]*quat[2] + quat[3]*quat[3]).sqrt();
+    web_sys::console::log_1(&format!(
+        "scale={:?} qnorm={} q_perp={} t={} opacity={}",
+        scale, qn, q_perp, t, opacity
+    ).into());
 
-        let a = vec3_dot(local_dir, local_dir);
-        let b = vec3_dot(local_origin, local_dir);
-        let c = vec3_dot(local_origin, local_origin) - 1.0;
-        let discriminant = b * b - a * c;
-        if discriminant < 0.0 {
-            return None;
-        }
-
-        let t = (-b - discriminant.sqrt()) / a;
-        Some(t)
-    }
+    Some((t, alpha))
 }
+
 
 fn sqr(x: f32) -> f32 {
     x * x
 }
+
 
 fn vec3_sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
@@ -156,4 +121,50 @@ fn quat_vec(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
         v[1] + 2.0 * (q[3] * uv[1] + uuv[1]),
         v[2] + 2.0 * (q[3] * uv[2] + uuv[2]),
     ]
+}
+
+
+#[inline]
+fn mix(x: f32, y: f32, a: f32) -> f32 {
+    x * (1.0 - a) + y * a
+}
+
+#[inline]
+fn gaussian_kernel_power(z2: f32, k: f32) -> f32 {
+    if k == 1.0 {
+        z2
+    } else if k == 2.0 {
+        z2 * z2
+    } else {
+        z2.max(0.0).powf(k)
+    }
+}
+
+#[inline]
+fn gaussian_kernel_scale(max_std_dev: f32, k: f32) -> f32 {
+    if k == 1.0 {
+        max_std_dev
+    } else if k == 2.0 {
+        max_std_dev.sqrt()
+    } else {
+        max_std_dev.max(0.0).powf(1.0 / k)
+    }
+}
+
+#[inline]
+fn gaussian_kernel(z2: f32, k: f32) -> f32 {
+    (-0.5 * gaussian_kernel_power(z2, k)).exp()
+}
+
+/// Applies the kernel falloff to an alpha value.
+#[inline]
+fn apply_kernel_alpha(a: f32, z2: f32, gaussian_k: f32, falloff: f32) -> f32 {
+    let kernel = gaussian_kernel(z2, gaussian_k);
+    if a <= 1.0 {
+        mix(a, a * kernel, falloff)
+    } else {
+        let p = ((a * a - 1.0) / std::f32::consts::E).exp();
+        let alpha = 1.0 - (1.0 - kernel).powf(p);
+        mix(1.0, alpha, falloff)
+    }
 }
