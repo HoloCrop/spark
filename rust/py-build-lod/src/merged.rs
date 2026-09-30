@@ -114,9 +114,9 @@ fn encode(py: Python<'_>, leaves: &TrainedLevel, parents: &MergedLevel,
     py.detach(|| -> anyhow::Result<EncodeTimings> {
         let start = Instant::now();
         splats.splats.reserve(opacity.len());
-        splats.sh1.reserve(opacity.len());
-        splats.sh2.reserve(opacity.len());
-        splats.sh3.reserve(opacity.len());
+        if splats.max_sh_degree >= 1 { splats.sh1.reserve(opacity.len()); }
+        if splats.max_sh_degree >= 2 { splats.sh2.reserve(opacity.len()); }
+        if splats.max_sh_degree >= 3 { splats.sh3.reserve(opacity.len()); }
         for (index, pair) in children.chunks_exact(2).enumerate() {
             let (left, right) = (pair[0] as usize, pair[1] as usize);
             let weight = weights[index];
@@ -125,10 +125,10 @@ fn encode(py: Python<'_>, leaves: &TrainedLevel, parents: &MergedLevel,
                 Vec3A::from_slice(&scales[index*3..index*3+3]),
                 Quat::from_slice(&rotation[index*4..index*4+4]).normalize(),
                 (labels[index*2]+1) as u32, (labels[index*2+1]+1) as u32);
-            let sh1 = GsplatSH1(mix(splats.sh1[left].0, splats.sh1[right].0, weight));
-            let sh2 = GsplatSH2(mix(splats.sh2[left].0, splats.sh2[right].0, weight));
-            let sh3 = GsplatSH3(mix(splats.sh3[left].0, splats.sh3[right].0, weight));
-            splats.push_splat(splat, Some(sh1), Some(sh2), Some(sh3));
+            let sh1 = (splats.max_sh_degree >= 1).then(|| GsplatSH1(mix(splats.sh1[left].0, splats.sh1[right].0, weight)));
+            let sh2 = (splats.max_sh_degree >= 2).then(|| GsplatSH2(mix(splats.sh2[left].0, splats.sh2[right].0, weight)));
+            let sh3 = (splats.max_sh_degree >= 3).then(|| GsplatSH3(mix(splats.sh3[left].0, splats.sh3[right].0, weight)));
+            splats.push_splat(splat, sh1, sh2, sh3);
         }
         splats.prepare_children();
         for (index, pair) in children.chunks_exact(2).enumerate() {

@@ -5,6 +5,7 @@ from collections.abc import Buffer, Sequence
 from typing import ClassVar
 
 class TrainedLevel:
+    """RGB-major sh_feature shape (N,3,C), where C=1,4,9,16 determines SH degree."""
     def __init__(self, position: Buffer, rotation: Buffer, log_scaling: Buffer,
                  alpha_logit: Buffer, sh_feature: Buffer, labels: Buffer) -> None: ...
 

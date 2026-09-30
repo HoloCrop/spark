@@ -9,6 +9,8 @@ rotation, scales, opacity, labels, right_weight)`: float32 positions (N,3), xyzw
 quaternions (N,4), scales (N,3), raw opacities (N,), right-child mass weights (N,),
 and int32 class/instance labels (N,2). Labels use -1 for unknown and zero for a
 real ID. Parent opacity can exceed one and retains the native LOD opacity curve.
+The leaf buffer's coefficient count determines SH degree 0 through 3; the
+encoder preserves it for both leaves and parents.
 
 `children` contains N uint32 pairs. Leaves precede parents, and each parent
 references two earlier nodes. Parent RGB and SH coefficients are propagated

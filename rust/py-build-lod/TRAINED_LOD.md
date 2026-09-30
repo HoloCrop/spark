@@ -2,8 +2,10 @@
 
 `TrainedLevel(position, rotation, log_scaling, alpha_logit, sh_feature, labels)`
 accepts Python buffers directly: float32 positions (N,3), xyzw quaternions (N,4),
-log scales (N,3), opacity logits (N,1), RGB-major SH3 coefficients (N,3,16), and
+log scales (N,3), opacity logits (N,1), RGB-major SH coefficients (N,3,C), and
 int32 class/instance labels (N,2). Labels use -1 for unknown; zero is a real ID.
+The input shape determines SH degree: C=1,4,9,16 means degree 0,1,2,3. Encoding
+retains this degree and never pads missing bands.
 
 `encode_trained_arrays(levels, parents, output_dir, moment_factor)`
 encodes levels in finest-to-coarsest order. Each uint32 parent buffer maps a row

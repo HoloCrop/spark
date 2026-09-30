@@ -172,3 +172,65 @@ mod py_build_lod {
     }
 
 }
+
+#[cfg(test)]
+mod tests {
+    use pyo3::{prelude::*, types::PyDict, wrap_pymodule};
+
+    #[test]
+    fn merged_archives_preserve_nonzero_harmonics_without_promoting_degree() {
+        Python::initialize();
+        Python::attach(|py| {
+            let globals = PyDict::new(py);
+            globals.set_item("lod", wrap_pymodule!(super::py_build_lod)(py)).unwrap();
+            py.run(cr#"
+from array import array
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from zipfile import ZipFile
+import json, struct, zlib
+
+geometry = None
+with TemporaryDirectory() as directory:
+    for degree in (2, 3):
+        coefficients = (degree + 1) ** 2
+        features = memoryview(array('f', (
+            .02 * (leaf + 1) * (axis + band + 1)
+            for leaf in range(2) for axis in range(3) for band in range(coefficients)
+        ))).cast('B').cast('f', shape=(2, 3, coefficients))
+        leaves = lod.TrainedLevel(array('f', [0,0,0, 1,0,0]),
+            array('f', [0,0,0,1] * 2), array('f', [-2] * 6), array('f', [1,1]),
+            features, array('i', [5,101] * 2))
+        parents = lod.MergedLevel(array('f', [.25,0,0]), array('f', [0,0,0,1]),
+            array('f', [.5,.2,.2]), array('f', [1.4]), array('i', [5,101]), array('f', [.25]))
+        path = Path(directory) / f'{degree}.zip'
+        lod.encode_merged_archive(leaves, parents, array('I', [0,1]), str(path), 1.75)
+        with ZipFile(path) as archive:
+            header = archive.read('bay-lod.rad')
+            length = struct.unpack_from('<I', header, 4)[0]
+            assert json.loads(header[8:8+length])['maxSh'] == degree
+            chunk = archive.read('bay-lod-0.radc')
+        length = struct.unpack_from('<I', chunk, 4)[0]
+        meta = json.loads(chunk[8:8+length])
+        payload = 16 + ((length + 7) // 8) * 8
+        properties = {}
+        for prop in meta['properties']:
+            start = payload + prop['offset']
+            data = zlib.decompress(chunk[start:start + prop['bytes']], -15)
+            properties[prop['property']] = data
+            if prop['property'] in ('sh1', 'sh2', 'sh3'):
+                band = int(prop['property'][-1])
+                decoded = struct.unpack(f'{len(data)}b', data)
+                for element in range((2 * band + 1) * 3):
+                    axis = element % 3
+                    coefficient = band * band + element // 3
+                    expected = .025 * (axis + coefficient + 1)
+                    assert abs(decoded[element * 3] * prop['max'] / 127 - expected) < .01
+        assert ('sh3' in properties) == (degree == 3)
+        current = {name: data for name, data in properties.items() if not name.startswith('sh')}
+        assert geometry is None or geometry == current
+        geometry = current
+"#, Some(&globals), None).unwrap();
+        });
+    }
+}
