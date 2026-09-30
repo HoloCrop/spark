@@ -57,6 +57,7 @@ fn raycast_ellipsoid(
     // u and v: origin and direction in rotated, inverse-scaled splat space.
     let u = quat_vec(inv_quat, origin);
     let v = quat_vec(inv_quat, dir);
+    
     let u = [u[0] / scale[0], u[1] / scale[1], u[2] / scale[2]];
     let v = [v[0] / scale[0], v[1] / scale[1], v[2] / scale[2]];
 
@@ -72,16 +73,10 @@ fn raycast_ellipsoid(
         u[2] + t * v[2],
     ];
     let q_perp = vec3_dot(closest, closest);
-    let alpha = apply_kernel_alpha(opacity, q_perp, 2.0, 1.0);
+    let alpha = apply_kernel_alpha(opacity, q_perp, 2.0, 1.0); 
     if alpha == 0.0 {
         return None;
     }
-
-    let qn = (quat[0]*quat[0] + quat[1]*quat[1] + quat[2]*quat[2] + quat[3]*quat[3]).sqrt();
-    web_sys::console::log_1(&format!(
-        "scale={:?} qnorm={} q_perp={} t={} opacity={}",
-        scale, qn, q_perp, t, opacity
-    ).into());
 
     Some((t, alpha))
 }
