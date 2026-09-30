@@ -27,7 +27,7 @@ use crate::splat_encode::{self, decode_scale8, encode_scale8_zero};
 pub const RAD_MAGIC: u32 = 0x30444152; // 'RAD0'
 pub const RAD_CHUNK_MAGIC: u32 = 0x43444152; // 'RADC'
 
-const GZ_LEVEL: u8 = 6;
+const GZ_LEVEL: u8 = 1;
 
 
 pub struct RadEncoder<T: SplatGetter> {
