@@ -6,7 +6,7 @@ use pyo3::prelude::*;
 #[pymodule]
 mod py_build_lod {
     #[pymodule_export]
-    use crate::merged::{MergedLevel, encode_merged_arrays, encode_merged_archive};
+    use crate::merged::{Compression, EncodeTimings, MergedLevel, encode_merged_arrays, encode_merged_archive};
     #[pymodule_export]
     use crate::trained::{TrainedLevel, encode_trained_arrays, encode_trained_archive};
     use pyo3::prelude::*;

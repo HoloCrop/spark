@@ -910,6 +910,18 @@ impl SplatReceiver for GsplatArray {
         }
     }
 
+    fn set_label(&mut self, base: usize, count: usize, labels: &[u32]) {
+        for i in 0..count {
+            self.splats[base + i].label = labels[i];
+        }
+    }
+
+    fn set_instance_label(&mut self, base: usize, count: usize, instances: &[u32]) {
+        for i in 0..count {
+            self.splats[base + i].instance_label = instances[i];
+        }
+    }
+
     fn set_sh1(&mut self, base: usize, count: usize, sh1: &[f32]) {
         if self.max_sh_degree >= 1 {
             for i in 0..count {

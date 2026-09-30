@@ -1,12 +1,39 @@
 //! Encode a GPU-produced binary tree without rebuilding its geometry or serializing an intermediate file.
 use pyo3::{buffer::PyBuffer, exceptions::PyValueError, prelude::*};
 use spark_lib::{bhatt_lod, chunk_tree, gsplat::{Gsplat, GsplatSH1, GsplatSH2, GsplatSH3},
-    rad::RadEncoder, tsplat::{Tsplat, TsplatArray}};
+    rad::{RadEncoder, RadChunkPropertyCompression}, tsplat::{Tsplat, TsplatArray}};
 use glam::{Quat, Vec3A};
 use half::f16;
-use std::{array, path::Path};
+use std::{array, path::Path, time::Instant};
 use crate::trained::TrainedLevel;
 use spark_lib::trained_lod::RadOutput;
+
+#[pyclass(eq, eq_int, from_py_object)]
+#[derive(Clone, Copy, PartialEq)]
+pub enum Compression {
+    Gz,
+    Zstd,
+}
+
+impl From<Compression> for RadChunkPropertyCompression {
+    fn from(compression: Compression) -> Self {
+        match compression {
+            Compression::Gz => Self::Gz,
+            Compression::Zstd => Self::Zstd,
+        }
+    }
+}
+
+#[pyclass(frozen, get_all)]
+pub struct EncodeTimings {
+    input_seconds: f64,
+    assemble_seconds: f64,
+    prune_seconds: f64,
+    chunk_seconds: f64,
+    resolve_seconds: f64,
+    encode_seconds: f64,
+    write_seconds: f64,
+}
 
 #[pyclass]
 pub struct MergedLevel {
@@ -41,19 +68,26 @@ fn mix<const N: usize>(left: [[f16; 3]; N], right: [[f16; 3]; N], weight: f32) -
 }
 
 #[pyfunction]
+#[pyo3(signature = (leaves, parents, children, output_dir, lod_base, compression=Compression::Gz))]
 pub fn encode_merged_arrays(py: Python<'_>, leaves: &TrainedLevel, parents: &MergedLevel,
-                            children: PyBuffer<u32>, output_dir: &str, lod_base: f32) -> PyResult<()> {
-    encode(py, leaves, parents, children, RadOutput::Directory(Path::new(output_dir)), lod_base)
+                            children: PyBuffer<u32>, output_dir: &str, lod_base: f32,
+                            compression: Compression) -> PyResult<()> {
+    encode(py, leaves, parents, children, RadOutput::Directory(Path::new(output_dir)), lod_base, compression)?;
+    Ok(())
 }
 
 #[pyfunction]
+#[pyo3(signature = (leaves, parents, children, output_file, lod_base, compression=Compression::Gz))]
 pub fn encode_merged_archive(py: Python<'_>, leaves: &TrainedLevel, parents: &MergedLevel,
-                             children: PyBuffer<u32>, output_file: &str, lod_base: f32) -> PyResult<()> {
-    encode(py, leaves, parents, children, RadOutput::Archive(Path::new(output_file)), lod_base)
+                             children: PyBuffer<u32>, output_file: &str, lod_base: f32,
+                             compression: Compression) -> PyResult<EncodeTimings> {
+    encode(py, leaves, parents, children, RadOutput::Archive(Path::new(output_file)), lod_base, compression)
 }
 
 fn encode(py: Python<'_>, leaves: &TrainedLevel, parents: &MergedLevel,
-          children: PyBuffer<u32>, output: RadOutput<'_>, lod_base: f32) -> PyResult<()> {
+          children: PyBuffer<u32>, output: RadOutput<'_>, lod_base: f32,
+          compression: Compression) -> PyResult<EncodeTimings> {
+    let start = Instant::now();
     let mut splats = leaves.splats(py)?;
     let leaf_count = splats.len();
     let position = parents.position.to_vec(py)?;
@@ -76,7 +110,9 @@ fn encode(py: Python<'_>, leaves: &TrainedLevel, parents: &MergedLevel,
             used[child] = true;
         }
     }
-    py.detach(|| -> anyhow::Result<()> {
+    let input_seconds = start.elapsed().as_secs_f64();
+    py.detach(|| -> anyhow::Result<EncodeTimings> {
+        let start = Instant::now();
         splats.splats.reserve(opacity.len());
         splats.sh1.reserve(opacity.len());
         splats.sh2.reserve(opacity.len());
@@ -98,13 +134,27 @@ fn encode(py: Python<'_>, leaves: &TrainedLevel, parents: &MergedLevel,
         for (index, pair) in children.chunks_exact(2).enumerate() {
             splats.set_children(leaf_count + index, &[pair[0] as usize, pair[1] as usize]);
         }
+        let assemble_seconds = start.elapsed().as_secs_f64();
+        let start = Instant::now();
         bhatt_lod::prune_lod_tree(&mut splats, leaf_count, lod_base, |_| {});
+        let prune_seconds = start.elapsed().as_secs_f64();
+        let start = Instant::now();
         chunk_tree::chunk_tree(&mut splats, 0, |_| {});
         splats.encode_lod_opacity();
+        let chunk_seconds = start.elapsed().as_secs_f64();
+        let start = Instant::now();
         let mut encoder = RadEncoder::new(splats);
+        encoder.compression = compression.into();
         encoder.resolve_encoding();
+        let resolve_seconds = start.elapsed().as_secs_f64();
+        let start = Instant::now();
         let mut header = Vec::new();
         let chunks = encoder.encode_with_chunks(&mut header, "bay-lod-")?;
-        output.write(header, chunks)
+        let encode_seconds = start.elapsed().as_secs_f64();
+        let start = Instant::now();
+        output.write(header, chunks)?;
+        let write_seconds = start.elapsed().as_secs_f64();
+        Ok(EncodeTimings { input_seconds, assemble_seconds, prune_seconds, chunk_seconds,
+            resolve_seconds, encode_seconds, write_seconds })
     }).map_err(|error| PyValueError::new_err(error.to_string()))
 }

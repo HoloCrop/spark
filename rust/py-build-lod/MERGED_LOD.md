@@ -15,6 +15,13 @@ references two earlier nodes. Parent RGB and SH coefficients are propagated
 using the supplied mass weights. Parent geometry is preserved, so the GPU
 builder controls generalized-Gaussian moment matching.
 
-The encoder applies native Bhatt level spacing, chunks the hierarchy, and uses
-DEFLATE for RAD properties. The outer ZIP stores those already compressed chunks.
+The encoder applies native Bhatt level spacing and chunks the hierarchy. The
+optional final `compression` argument accepts `Compression.Gz` (the default
+level-1 DEFLATE encoding) or `Compression.Zstd` (zstd level 3). Geometry, SH,
+labels and property quantization are identical for both. The outer ZIP stores
+those already compressed chunks.
 `encode_merged_arrays` remains available to write the same output to a directory.
+
+`encode_merged_archive` returns immutable `EncodeTimings`: input conversion,
+parent assembly, pruning, chunking, quantization-range resolution, property
+encoding/compression, and archive writing times in seconds.
