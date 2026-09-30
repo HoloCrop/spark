@@ -175,7 +175,6 @@ pub trait SplatReceiver: 'static {
 
     fn set_child_count(&mut self, base: usize, count: usize, child_count: &[u16]) {}
     fn set_child_start(&mut self, base: usize, count: usize, child_start: &[usize]) {}
-    fn set_lod_size(&mut self, base: usize, count: usize, sizes: &[f32]) {}
 }
 
 #[derive(Default)]

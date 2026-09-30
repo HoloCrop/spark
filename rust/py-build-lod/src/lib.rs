@@ -50,10 +50,10 @@ mod py_build_lod {
 
     #[pyfunction]
     fn encode_trained_rad(directory: &str, output_dir: &str, levels: usize,
-                          moment_factor: f32, resolution_factor: f32) -> PyResult<()> {
+                          moment_factor: f32) -> PyResult<()> {
         spark_lib::trained_lod::encode_levels(
             std::path::Path::new(directory), std::path::Path::new(output_dir),
-            levels, moment_factor, resolution_factor,
+            levels, moment_factor,
         ).map_err(|error| PyValueError::new_err(error.to_string()))
     }
 

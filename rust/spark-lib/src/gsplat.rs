@@ -8,7 +8,7 @@ use smallvec::SmallVec;
 use crate::decoder::{SetSplatEncoding, SplatEncoding, SplatGetter, SplatInit, SplatProps, SplatReceiver};
 use crate::splat_encode::{encode_packed_splat, encode_sh1, encode_sh2, encode_sh3, get_splat_tex_size};
 use crate::symmat3::SymMat3;
-use crate::tsplat::{Tsplat, TsplatArray, TsplatMut, apply_swaps, compute_swaps, similarity_metric};
+use crate::tsplat::{Tsplat, TsplatArray, TsplatMut, apply_swaps, compute_swaps, similarity_metric_with_moments};
 
 const INFLATE_SCALE: bool = false;
 
@@ -222,7 +222,25 @@ impl GsplatSH3 {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub enum GaussianKernel {
+    #[default]
+    K1,
+    K2,
+}
+
+impl GaussianKernel {
+    /// Per-axis second moment of the projected exp(-r^(2k)/2) kernel.
+    pub fn moment_factor(self) -> f32 {
+        match self {
+            Self::K1 => 1.0,
+            Self::K2 => 1.0 / (2.0 * std::f32::consts::PI).sqrt(),
+        }
+    }
+}
+
 pub struct GsplatArray {
+    pub kernel: GaussianKernel,
     pub max_sh_degree: usize,
     pub splats: Vec<Gsplat>,
     pub children: Vec<SmallVec<[usize; 4]>>,
@@ -238,6 +256,7 @@ impl TsplatArray for GsplatArray {
     fn new_capacity(capacity: usize, max_sh_degree: usize) -> Self {
         assert!(max_sh_degree <= 3, "SH degrees must be between 0 and 3");
         Self {
+            kernel: GaussianKernel::K1,
             max_sh_degree,
             splats: Vec::with_capacity(capacity),
             children: Vec::new(), //Vec::with_capacity(capacity),
@@ -324,19 +343,22 @@ impl TsplatArray for GsplatArray {
         }
 
         let mut total_cov = SymMat3::new_zeros();
+        let moment_factor = self.kernel.moment_factor();
         let filter2 = (0.5 * step).powi(2);
+        // Average shape matrices, but convert center-spread covariance back
+        // into kernel shape units. Equal co-located shapes remain unchanged.
 
         for (i, &index) in indices.iter().enumerate() {
             let splat = &self.splats[index as usize];
             let weight = weights[i];
             let delta = splat.center() - center;
             let cov = SymMat3::new_scale_quaternion(splat.scales(), splat.quaternion());
-            let xx = delta.x * delta.x + cov.xx() + filter2;
-            let yy = delta.y * delta.y + cov.yy() + filter2;
-            let zz = delta.z * delta.z + cov.zz() + filter2;
-            let xy = delta.x * delta.y + cov.xy();
-            let xz = delta.x * delta.z + cov.xz();
-            let yz = delta.y * delta.z + cov.yz();
+            let xx = delta.x * delta.x / moment_factor + cov.xx() + filter2;
+            let yy = delta.y * delta.y / moment_factor + cov.yy() + filter2;
+            let zz = delta.z * delta.z / moment_factor + cov.zz() + filter2;
+            let xy = delta.x * delta.y / moment_factor + cov.xy();
+            let xz = delta.x * delta.z / moment_factor + cov.xz();
+            let yz = delta.y * delta.z / moment_factor + cov.yz();
             total_cov.add_weighted(&SymMat3::new([xx, yy, zz, xy, xz, yz]), weight);
         }
 
@@ -487,7 +509,7 @@ impl TsplatArray for GsplatArray {
     }
 
     fn similarity(&self, a: usize, b: usize) -> f32 {
-        similarity_metric(&self.get(a), &self.get(b))
+        similarity_metric_with_moments(&self.get(a), &self.get(b), self.kernel.moment_factor())
     }
 
     fn retain<F: (FnMut(&mut Gsplat) -> bool)>(&mut self, mut f: F) {
@@ -597,6 +619,7 @@ impl TsplatArray for GsplatArray {
 
     fn new_from_index_map(&mut self, index_map: &[usize]) -> Self {
         Self {
+            kernel: self.kernel,
             max_sh_degree: self.max_sh_degree,
             splats: index_map.iter().map(|&i| self.splats[i].clone()).collect(),
             children: if !self.children.is_empty() {
@@ -624,6 +647,7 @@ impl TsplatArray for GsplatArray {
 
     fn clone_subset(&self, start: usize, count: usize) -> Self {
         Self {
+            kernel: self.kernel,
             max_sh_degree: self.max_sh_degree,
             splats: self.splats[start..start + count].to_vec(),
             children: if self.children.is_empty() { Vec::new() } else { self.children[start..start + count].to_vec() },

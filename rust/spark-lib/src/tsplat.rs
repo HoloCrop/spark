@@ -166,6 +166,12 @@ pub fn apply_swaps<T>(data: &mut [T], swaps: &[(usize, usize)]) {
 }
 
 pub fn bhattacharyya_distance(a: &impl Tsplat, b: &impl Tsplat) -> f32 {
+    moment_matched_distance(a, b, 1.0)
+}
+
+/// Gaussian overlap approximation using the projected kernel's second moments.
+/// For k=2 this is not the exact generalized-Gaussian Bhattacharyya distance.
+pub fn moment_matched_distance(a: &impl Tsplat, b: &impl Tsplat, moment_factor: f32) -> f32 {
     let cov_a = SymMat3::new_scale_quaternion(a.scales(), a.quaternion());
     let cov_b = SymMat3::new_scale_quaternion(b.scales(), b.quaternion());
     let sigma = SymMat3::new_average(&cov_a, &cov_b);
@@ -180,7 +186,7 @@ pub fn bhattacharyya_distance(a: &impl Tsplat, b: &impl Tsplat) -> f32 {
         + 2.0 * inv.xy() * delta.x * delta.y
         + 2.0 * inv.xz() * delta.x * delta.z
         + 2.0 * inv.yz() * delta.y * delta.z;
-    let term1 = 0.125 * quad;
+    let term1 = 0.125 * quad / moment_factor;
 
     let det_sigma = sigma.determinant();
     let det_a = cov_a.determinant();
@@ -195,7 +201,11 @@ pub fn bhattacharyya_coeff(a: &impl Tsplat, b: &impl Tsplat) -> f32 {
 }
 
 pub fn similarity_metric(a: &impl Tsplat, b: &impl Tsplat) -> f32 {
-    let spatial = bhattacharyya_coeff(a, b);
+    similarity_metric_with_moments(a, b, 1.0)
+}
+
+pub fn similarity_metric_with_moments(a: &impl Tsplat, b: &impl Tsplat, moment_factor: f32) -> f32 {
+    let spatial = (-moment_matched_distance(a, b, moment_factor)).exp();
     if a.label() != a.label() {
         return 0.0
     }

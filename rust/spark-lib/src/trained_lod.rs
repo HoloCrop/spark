@@ -159,7 +159,6 @@ pub fn encode_levels(
     output: &Path,
     levels: usize,
     moment_factor: f32,
-    resolution_factor: f32,
 ) -> anyhow::Result<()> {
     anyhow::ensure!(levels > 0, "at least one trained level is required");
     let clouds = (1..=levels).map(|level| read(&directory.join(format!("level-{level}/point_cloud.ply"))))
@@ -168,23 +167,23 @@ pub fn encode_levels(
         let bytes = fs::read(directory.join(format!("parents-{level}.bin")))?;
         Ok(bytes.chunks_exact(4).map(|word| u32::from_le_bytes(word.try_into().unwrap())).collect())
     }).collect::<anyhow::Result<Vec<Vec<u32>>>>()?;
-    encode_arrays(clouds, parents, RadOutput::Directory(output), moment_factor, resolution_factor)
+    encode_arrays(clouds, parents, RadOutput::Directory(output), moment_factor)
 }
 
 pub fn encode_arrays(
     clouds: Vec<GsplatArray>, parents: Vec<Vec<u32>>, output: RadOutput<'_>,
-    moment_factor: f32, resolution_factor: f32,
+    moment_factor: f32,
 ) -> anyhow::Result<()> {
     #[cfg(feature = "parallel")]
     { rayon::ThreadPoolBuilder::new().num_threads(16).build()?.install(||
-        encode_arrays_inner(clouds, parents, output, moment_factor, resolution_factor)) }
+        encode_arrays_inner(clouds, parents, output, moment_factor)) }
     #[cfg(not(feature = "parallel"))]
-    { encode_arrays_inner(clouds, parents, output, moment_factor, resolution_factor) }
+    { encode_arrays_inner(clouds, parents, output, moment_factor) }
 }
 
 fn encode_arrays_inner(
     mut clouds: Vec<GsplatArray>, parents: Vec<Vec<u32>>, output: RadOutput<'_>,
-    moment_factor: f32, resolution_factor: f32,
+    moment_factor: f32,
 ) -> anyhow::Result<()> {
     let started = std::time::Instant::now();
     let levels = clouds.len();
@@ -252,34 +251,7 @@ fn encode_arrays_inner(
         leaf_count
     );
     splats.encode_lod_opacity();
-    // Selection bounds are independent of rendered geometry. Each intermediate
-    // representative gets a distinct scale interval, even if training shrank it.
-    let mut lod_sizes = vec![0.0f32; splats.len()];
-    let mut heights = vec![0usize; splats.len()];
-    for index in (0..splats.len()).rev() {
-        let splat = splats.get(index);
-        let mut size = 2.0 * splat.scales().element_sum() / 3.0;
-        for &child in &splats.children[index] {
-            assert!(child > index);
-            let distance = (splat.center() - splats.get(child).center()).length();
-            heights[index] = heights[index].max(heights[child] + 1);
-            // Only trained level transitions use the training resolution ratio.
-            // Ancestors above them need ordering, not another exponential schedule.
-            let ratio = if heights[child] < levels - 1 {
-                resolution_factor
-            } else {
-                1.001
-            };
-            size = size.max(ratio * lod_sizes[child] + 2.0 * distance);
-        }
-        assert!(
-            size.is_finite() && size <= 65504.0,
-            "LOD size exceeds decoder f16 range"
-        );
-        lod_sizes[index] = size;
-    }
     let mut encoder = RadEncoder::new(splats);
-    encoder.lod_sizes = lod_sizes;
     encoder.resolve_encoding();
     let prepared = started.elapsed();
     let mut header = Vec::new();

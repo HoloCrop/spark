@@ -45,7 +45,6 @@ pub struct RadEncoder<T: SplatGetter> {
     pub sh_label_encoding: RadShLabelEncoding,
     pub sh_clusters: Option<ShClusters>,
     pub comment: Option<String>,
-    pub lod_sizes: Vec<f32>,
     pub compression: RadChunkPropertyCompression,
 }
 
@@ -229,8 +228,6 @@ pub enum RadChunkPropertyName {
     ChildCount,
     #[serde(rename = "child_start")]
     ChildStart,
-    #[serde(rename = "lod_size")]
-    LodSize,
     #[serde(rename = "sh1_code")]
     Sh1Code,
     #[serde(rename = "sh2_code")]
@@ -298,7 +295,6 @@ impl<T: SplatGetter> RadEncoder<T> {
             sh_label_encoding: RadShLabelEncoding::default(),
             sh_clusters: None,
             comment: None,
-            lod_sizes: Vec::new(),
             compression: RadChunkPropertyCompression::Gz,
         }
     }
@@ -989,15 +985,6 @@ impl<T: SplatGetter> RadEncoder<T> {
             props.push(self.encode_chunk_child_start(base, count, buffer_usize));
         }
 
-        if !self.lod_sizes.is_empty() {
-            anyhow::ensure!(self.lod_sizes.len() == self.getter.num_splats(), "LOD size count mismatch");
-            let bytes = encode_f32(&self.lod_sizes[base..base+count], 1, count);
-            props.push((RadChunkProperty {
-                property: RadChunkPropertyName::LodSize,
-                encoding: RadChunkPropertyEncoding::F32,
-                ..Default::default()
-            }, bytes));
-        }
         // Properties are independently compressed. Keep their order and encoding
         // identical while allowing native exporters to use a bounded thread pool.
         #[cfg(feature = "parallel")]
@@ -1905,11 +1892,6 @@ impl<T: SplatReceiver> RadDecoder<T> {
                     let child_counts = decode_u16(data, 1, self.count);
                     self.splats.set_child_count(self.base, self.count, &child_counts);
                 },
-                RadChunkPropertyName::LodSize => {
-                    anyhow::ensure!(prop.encoding == RadChunkPropertyEncoding::F32, "LOD size requires f32");
-                    let sizes = decode_f32(data, 1, self.count);
-                    self.splats.set_lod_size(self.base, self.count, &sizes);
-                }
                 RadChunkPropertyName::ChildStart => {
                     if prop.encoding != RadChunkPropertyEncoding::U32 {
                         return Err(anyhow::anyhow!("Unsupported child start encoding: {:?}", prop.encoding));

@@ -59,20 +59,20 @@ impl TrainedLevel {
 
 #[pyfunction]
 pub fn encode_trained_arrays(py: Python<'_>, levels: Vec<Py<TrainedLevel>>, parents: Vec<PyBuffer<u32>>,
-                             output_dir: &str, moment_factor: f32, resolution_factor: f32) -> PyResult<()> {
-    encode(py, levels, parents, RadOutput::Directory(Path::new(output_dir)), moment_factor, resolution_factor)
+                             output_dir: &str, moment_factor: f32) -> PyResult<()> {
+    encode(py, levels, parents, RadOutput::Directory(Path::new(output_dir)), moment_factor)
 }
 
 #[pyfunction]
 pub fn encode_trained_archive(py: Python<'_>, levels: Vec<Py<TrainedLevel>>, parents: Vec<PyBuffer<u32>>,
-                              output_file: &str, moment_factor: f32, resolution_factor: f32) -> PyResult<()> {
-    encode(py, levels, parents, RadOutput::Archive(Path::new(output_file)), moment_factor, resolution_factor)
+                              output_file: &str, moment_factor: f32) -> PyResult<()> {
+    encode(py, levels, parents, RadOutput::Archive(Path::new(output_file)), moment_factor)
 }
 
 fn encode(py: Python<'_>, levels: Vec<Py<TrainedLevel>>, parents: Vec<PyBuffer<u32>>,
-          output: RadOutput<'_>, moment_factor: f32, resolution_factor: f32) -> PyResult<()> {
+          output: RadOutput<'_>, moment_factor: f32) -> PyResult<()> {
     let clouds = levels.iter().map(|level| level.borrow(py).splats(py)).collect::<PyResult<Vec<_>>>()?;
     let parents = parents.iter().map(|parent| parent.to_vec(py)).collect::<PyResult<Vec<_>>>()?;
-    py.detach(|| spark_lib::trained_lod::encode_arrays(clouds, parents, output, moment_factor, resolution_factor))
+    py.detach(|| spark_lib::trained_lod::encode_arrays(clouds, parents, output, moment_factor))
         .map_err(|error| PyValueError::new_err(error.to_string()))
 }
