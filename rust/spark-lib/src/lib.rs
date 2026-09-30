@@ -39,8 +39,8 @@ mod tests {
             Vec3A::from_array(rgb),
             Vec3A::from_array(scales),
             Quat::from_array(quat_xyzw),
-            0.0,
-            0.0
+            0,
+            0
         )
     }
 
@@ -179,8 +179,8 @@ mod ply_tests {
             Vec3A::from_array(rgb),
             Vec3A::from_array(scales),
             Quat::from_array(quat_xyzw),
-            0.0,
-            0.0
+            0,
+            0
         )
     }
 

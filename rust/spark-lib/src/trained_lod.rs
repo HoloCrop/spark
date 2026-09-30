@@ -16,7 +16,7 @@ pub enum RadOutput<'a> {
 }
 
 impl RadOutput<'_> {
-    fn write(self, header: Vec<u8>, chunks: Vec<(String, Vec<u8>)>) -> anyhow::Result<()> {
+    pub fn write(self, header: Vec<u8>, chunks: Vec<(String, Vec<u8>)>) -> anyhow::Result<()> {
         let files = std::iter::once(("bay-lod.rad".to_owned(), header)).chain(chunks);
         match self {
             Self::Directory(path) => {

@@ -4,8 +4,9 @@ use spark_lib::{bhatt_lod, chunk_tree, gsplat::{Gsplat, GsplatSH1, GsplatSH2, Gs
     rad::RadEncoder, tsplat::{Tsplat, TsplatArray}};
 use glam::{Quat, Vec3A};
 use half::f16;
-use std::{array, fs, path::Path};
+use std::{array, path::Path};
 use crate::trained::TrainedLevel;
+use spark_lib::trained_lod::RadOutput;
 
 #[pyclass]
 pub struct MergedLevel {
@@ -42,6 +43,17 @@ fn mix<const N: usize>(left: [[f16; 3]; N], right: [[f16; 3]; N], weight: f32) -
 #[pyfunction]
 pub fn encode_merged_arrays(py: Python<'_>, leaves: &TrainedLevel, parents: &MergedLevel,
                             children: PyBuffer<u32>, output_dir: &str, lod_base: f32) -> PyResult<()> {
+    encode(py, leaves, parents, children, RadOutput::Directory(Path::new(output_dir)), lod_base)
+}
+
+#[pyfunction]
+pub fn encode_merged_archive(py: Python<'_>, leaves: &TrainedLevel, parents: &MergedLevel,
+                             children: PyBuffer<u32>, output_file: &str, lod_base: f32) -> PyResult<()> {
+    encode(py, leaves, parents, children, RadOutput::Archive(Path::new(output_file)), lod_base)
+}
+
+fn encode(py: Python<'_>, leaves: &TrainedLevel, parents: &MergedLevel,
+          children: PyBuffer<u32>, output: RadOutput<'_>, lod_base: f32) -> PyResult<()> {
     let mut splats = leaves.splats(py)?;
     let leaf_count = splats.len();
     let position = parents.position.to_vec(py)?;
@@ -93,10 +105,6 @@ pub fn encode_merged_arrays(py: Python<'_>, leaves: &TrainedLevel, parents: &Mer
         encoder.resolve_encoding();
         let mut header = Vec::new();
         let chunks = encoder.encode_with_chunks(&mut header, "bay-lod-")?;
-        let output = Path::new(output_dir);
-        fs::create_dir_all(output)?;
-        fs::write(output.join("bay-lod.rad"), header)?;
-        for (name, bytes) in chunks { fs::write(output.join(name), bytes)?; }
-        Ok(())
+        output.write(header, chunks)
     }).map_err(|error| PyValueError::new_err(error.to_string()))
 }

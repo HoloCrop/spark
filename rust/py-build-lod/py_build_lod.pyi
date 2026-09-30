@@ -19,3 +19,6 @@ class MergedLevel:
 
 def encode_merged_arrays(leaves: TrainedLevel, parents: MergedLevel, children: Buffer,
                          output_dir: str, lod_base: float) -> None: ...
+
+def encode_merged_archive(leaves: TrainedLevel, parents: MergedLevel, children: Buffer,
+                          output_file: str, lod_base: float) -> None: ...
