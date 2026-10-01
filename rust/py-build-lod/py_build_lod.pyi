@@ -1,19 +1,12 @@
 def encode_rad(input_file: str, output_dir: str) -> None: ...
-def encode_trained_rad(directory: str, output_dir: str, levels: int, moment_factor: float) -> None: ...
 
-from collections.abc import Buffer, Sequence
+from collections.abc import Buffer
 from typing import ClassVar
 
-class TrainedLevel:
+class SplatInput:
     """RGB-major sh_feature shape (N,3,C), where C=1,4,9,16 determines SH degree."""
     def __init__(self, position: Buffer, rotation: Buffer, log_scaling: Buffer,
                  alpha_logit: Buffer, sh_feature: Buffer, labels: Buffer) -> None: ...
-
-def encode_trained_arrays(levels: Sequence[TrainedLevel], parents: Sequence[Buffer],
-                          output_dir: str, moment_factor: float) -> None: ...
-
-def encode_trained_archive(levels: Sequence[TrainedLevel], parents: Sequence[Buffer],
-                           output_file: str, moment_factor: float) -> None: ...
 
 class MergedLevel:
     def __init__(self, position: Buffer, rotation: Buffer, scales: Buffer,
@@ -39,10 +32,10 @@ class EncodeTimings:
     @property
     def write_seconds(self) -> float: ...
 
-def encode_merged_arrays(leaves: TrainedLevel, parents: MergedLevel, children: Buffer,
+def encode_merged_arrays(leaves: SplatInput, parents: MergedLevel, children: Buffer,
                          output_dir: str, lod_base: float,
                          compression: Compression = Compression.Gz) -> None: ...
 
-def encode_merged_archive(leaves: TrainedLevel, parents: MergedLevel, children: Buffer,
+def encode_merged_archive(leaves: SplatInput, parents: MergedLevel, children: Buffer,
                           output_file: str, lod_base: float,
                           compression: Compression = Compression.Gz) -> EncodeTimings: ...

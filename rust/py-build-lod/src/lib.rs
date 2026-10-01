@@ -1,4 +1,4 @@
-mod trained;
+mod input;
 mod merged;
 use pyo3::prelude::*;
 
@@ -8,7 +8,7 @@ mod py_build_lod {
     #[pymodule_export]
     use crate::merged::{Compression, EncodeTimings, MergedLevel, encode_merged_arrays, encode_merged_archive};
     #[pymodule_export]
-    use crate::trained::{TrainedLevel, encode_trained_arrays, encode_trained_archive};
+    use crate::input::SplatInput;
     use pyo3::prelude::*;
     use pyo3::exceptions::PyValueError;
     use spark_lib::decoder::SplatGetter;
@@ -50,15 +50,6 @@ mod py_build_lod {
         })
     }
 
-
-    #[pyfunction]
-    fn encode_trained_rad(directory: &str, output_dir: &str, levels: usize,
-                          moment_factor: f32) -> PyResult<()> {
-        spark_lib::trained_lod::encode_levels(
-            std::path::Path::new(directory), std::path::Path::new(output_dir),
-            levels, moment_factor,
-        ).map_err(|error| PyValueError::new_err(error.to_string()))
-    }
 
     #[pyfunction]
     fn encode_rad(input_file: &str, output_dir: &str) -> PyResult<()> {
@@ -198,7 +189,7 @@ with TemporaryDirectory() as directory:
             .02 * (leaf + 1) * (axis + band + 1)
             for leaf in range(2) for axis in range(3) for band in range(coefficients)
         ))).cast('B').cast('f', shape=(2, 3, coefficients))
-        leaves = lod.TrainedLevel(array('f', [0,0,0, 1,0,0]),
+        leaves = lod.SplatInput(array('f', [0,0,0, 1,0,0]),
             array('f', [0,0,0,1] * 2), array('f', [-2] * 6), array('f', [1,1]),
             features, array('i', [5,101] * 2))
         parents = lod.MergedLevel(array('f', [.25,0,0]), array('f', [0,0,0,1]),

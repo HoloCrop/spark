@@ -3,11 +3,10 @@ use pyo3::{buffer::PyBuffer, exceptions::PyValueError, prelude::*};
 use spark_lib::{gsplat::{Gsplat, GsplatArray, GsplatSH1, GsplatSH2, GsplatSH3}, tsplat::TsplatArray};
 use glam::{Quat, Vec3A};
 use half::f16;
-use std::{array, path::Path};
-use spark_lib::trained_lod::RadOutput;
+use std::array;
 
 #[pyclass]
-pub struct TrainedLevel {
+pub struct SplatInput {
     position: PyBuffer<f32>,
     rotation: PyBuffer<f32>,
     log_scaling: PyBuffer<f32>,
@@ -18,7 +17,7 @@ pub struct TrainedLevel {
 }
 
 #[pymethods]
-impl TrainedLevel {
+impl SplatInput {
     #[new]
     fn new(position: PyBuffer<f32>, rotation: PyBuffer<f32>, log_scaling: PyBuffer<f32>,
            alpha_logit: PyBuffer<f32>, sh_feature: PyBuffer<f32>, labels: PyBuffer<i32>) -> PyResult<Self> {
@@ -42,7 +41,7 @@ impl TrainedLevel {
     }
 }
 
-impl TrainedLevel {
+impl SplatInput {
     pub(crate) fn splats(&self, py: Python<'_>) -> PyResult<GsplatArray> {
         let position = self.position.to_vec(py)?;
         let rotation = self.rotation.to_vec(py)?;
@@ -67,24 +66,4 @@ impl TrainedLevel {
         }
         Ok(result)
     }
-}
-
-#[pyfunction]
-pub fn encode_trained_arrays(py: Python<'_>, levels: Vec<Py<TrainedLevel>>, parents: Vec<PyBuffer<u32>>,
-                             output_dir: &str, moment_factor: f32) -> PyResult<()> {
-    encode(py, levels, parents, RadOutput::Directory(Path::new(output_dir)), moment_factor)
-}
-
-#[pyfunction]
-pub fn encode_trained_archive(py: Python<'_>, levels: Vec<Py<TrainedLevel>>, parents: Vec<PyBuffer<u32>>,
-                              output_file: &str, moment_factor: f32) -> PyResult<()> {
-    encode(py, levels, parents, RadOutput::Archive(Path::new(output_file)), moment_factor)
-}
-
-fn encode(py: Python<'_>, levels: Vec<Py<TrainedLevel>>, parents: Vec<PyBuffer<u32>>,
-          output: RadOutput<'_>, moment_factor: f32) -> PyResult<()> {
-    let clouds = levels.iter().map(|level| level.borrow(py).splats(py)).collect::<PyResult<Vec<_>>>()?;
-    let parents = parents.iter().map(|parent| parent.to_vec(py)).collect::<PyResult<Vec<_>>>()?;
-    py.detach(|| spark_lib::trained_lod::encode_arrays(clouds, parents, output, moment_factor))
-        .map_err(|error| PyValueError::new_err(error.to_string()))
 }

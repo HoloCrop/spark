@@ -5,8 +5,8 @@ use spark_lib::{bhatt_lod, chunk_tree, gsplat::{Gsplat, GsplatSH1, GsplatSH2, Gs
 use glam::{Quat, Vec3A};
 use half::f16;
 use std::{array, path::Path, time::Instant};
-use crate::trained::TrainedLevel;
-use spark_lib::trained_lod::RadOutput;
+use crate::input::SplatInput;
+use spark_lib::rad_output::RadOutput;
 
 #[pyclass(eq, eq_int, from_py_object)]
 #[derive(Clone, Copy, PartialEq)]
@@ -69,7 +69,7 @@ fn mix<const N: usize>(left: [[f16; 3]; N], right: [[f16; 3]; N], weight: f32) -
 
 #[pyfunction]
 #[pyo3(signature = (leaves, parents, children, output_dir, lod_base, compression=Compression::Gz))]
-pub fn encode_merged_arrays(py: Python<'_>, leaves: &TrainedLevel, parents: &MergedLevel,
+pub fn encode_merged_arrays(py: Python<'_>, leaves: &SplatInput, parents: &MergedLevel,
                             children: PyBuffer<u32>, output_dir: &str, lod_base: f32,
                             compression: Compression) -> PyResult<()> {
     encode(py, leaves, parents, children, RadOutput::Directory(Path::new(output_dir)), lod_base, compression)?;
@@ -78,13 +78,13 @@ pub fn encode_merged_arrays(py: Python<'_>, leaves: &TrainedLevel, parents: &Mer
 
 #[pyfunction]
 #[pyo3(signature = (leaves, parents, children, output_file, lod_base, compression=Compression::Gz))]
-pub fn encode_merged_archive(py: Python<'_>, leaves: &TrainedLevel, parents: &MergedLevel,
+pub fn encode_merged_archive(py: Python<'_>, leaves: &SplatInput, parents: &MergedLevel,
                              children: PyBuffer<u32>, output_file: &str, lod_base: f32,
                              compression: Compression) -> PyResult<EncodeTimings> {
     encode(py, leaves, parents, children, RadOutput::Archive(Path::new(output_file)), lod_base, compression)
 }
 
-fn encode(py: Python<'_>, leaves: &TrainedLevel, parents: &MergedLevel,
+fn encode(py: Python<'_>, leaves: &SplatInput, parents: &MergedLevel,
           children: PyBuffer<u32>, output: RadOutput<'_>, lod_base: f32,
           compression: Compression) -> PyResult<EncodeTimings> {
     let start = Instant::now();

@@ -224,4 +224,4 @@ mod ply_tests {
     }
 }
 
-pub mod trained_lod;
+pub mod rad_output;
