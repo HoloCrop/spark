@@ -17,9 +17,11 @@ pub fn raycast_packed_ellipsoids(
         let center = decode_packed_splat_center(packed);
         let scale = decode_packed_splat_scale(packed, encoding);
         let quat = decode_packed_splat_quat(packed);
-        if let Some((t, alpha)) = raycast_ellipsoid(origin, dir, opacity, center, scale, quat) {
+        if let Some((t, alpha)) =
+            raycast_ellipsoid(origin, dir, opacity, center, scale, quat)
+        {
             if t >= near && t <= far {
-                distances.push(t);
+                distances.extend_from_slice(&[t, alpha]);
             }
         }
     }
@@ -66,19 +68,24 @@ fn raycast_ellipsoid(
         return None;
     }
     
-    let t = -vec3_dot(u, v) / vv;
-    let closest = [
-        u[0] + t * v[0],
-        u[1] + t * v[1],
-        u[2] + t * v[2],
-    ];
-    let q_perp = vec3_dot(closest, closest);
-    let alpha = apply_kernel_alpha(opacity, q_perp, 2.0, 1.0); 
-    if alpha == 0.0 {
+    let t_peak = -vec3_dot(u, v) / vv;
+    if !t_peak.is_finite() {
         return None;
     }
-
-    Some((t, alpha))
+    
+    let closest = [
+        u[0] + t_peak * v[0],
+        u[1] + t_peak * v[1],
+        u[2] + t_peak * v[2],
+    ];
+    
+    let q_perp = vec3_dot(closest, closest);
+    let alpha = apply_kernel_alpha(opacity, q_perp, 2.0, 1.0);
+    if !alpha.is_finite() || alpha <= 0.0 {
+        return None;
+    }
+    
+    Some((t_peak, alpha))
 }
 
 
