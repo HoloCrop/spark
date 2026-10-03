@@ -5,6 +5,7 @@ import {
   get_raycast_buffer2,
   raycast_ext_buffers,
   raycast_packed_buffer,
+  raycast_surface_depth,
 } from "spark-rs";
 import { ExtSplats } from "./ExtSplats";
 import { PackedSplats } from "./PackedSplats";
@@ -89,7 +90,7 @@ export type SplatMeshOptions = {
   editable?: boolean;
   // Controls whether SplatMesh participates in Three.js raycasting (default: true)
   raycastable?: boolean;
-  // Minimum opacity for raycasting splats. (default: 0.2)
+  // Minimum k=2 Gaussian response along the ray. (default: 0.2)
   minRaycastOpacity?: number;
   // Callback function that is called every frame to update the mesh.
   // Call mesh.updateVersion() if splats need to be regenerated due to some change.
@@ -1009,9 +1010,7 @@ export class SplatMesh extends SplatGenerator {
     this.onFrame?.({ mesh: this, time, deltaTime });
   }
 
-  // This method conforms to the standard THREE.Raycaster API, performing object-ray
-  // intersections using this method to populate the provided intersects[] array
-  // with each intersection point.
+  // Append the combined k=2 transmittance's 0.5 surface crossing to intersects.
   raycast(
     raycaster: THREE.Raycaster,
     intersects: {
@@ -1023,6 +1022,7 @@ export class SplatMesh extends SplatGenerator {
     if (
       !wasm.isInitialized() ||
       !this.raycastable ||
+      this.opacity === 0 ||
       (!this.packedSplats && !this.extSplats && !this.paged)
     ) {
       return;
@@ -1040,7 +1040,7 @@ export class SplatMesh extends SplatGenerator {
 
     const buffer = get_raycast_buffer();
     const bufferSize = buffer.length / 4;
-    let intersections = 0;
+    let samples = 0;
 
     const numSplats =
       this.raycastIndices?.numSplats ??
@@ -1054,6 +1054,12 @@ export class SplatMesh extends SplatGenerator {
           ? (this.context.lodIndices.value.image.data as Uint32Array)
           : null) ??
       null;
+    const labels = this.paged?.pager?.labelTexture.value.image.data as
+      | Uint32Array
+      | undefined;
+    const labelsLookUp = this.paged?.pager?.lookUpTexture.value.image.data as
+      | Uint32Array
+      | undefined;
 
     if (!ext) {
       const packed = paged
@@ -1083,7 +1089,16 @@ export class SplatMesh extends SplatGenerator {
           }
         }
 
-        const newIntersections = raycast_packed_buffer(
+        if (labels !== undefined && labelsLookUp !== undefined) {
+          for (let i = 0; i < count; ++i) {
+            const index = indices ? indices[base + i] : base + i;
+            if (labelsLookUp[labels[index]] === 0) {
+              buffer[i * 4] &= 0x00ffffff;
+            }
+          }
+        }
+
+        const profiles = raycast_packed_buffer(
           origin.x,
           origin.y,
           origin.z,
@@ -1091,17 +1106,12 @@ export class SplatMesh extends SplatGenerator {
           direction.y,
           direction.z,
           this.minRaycastOpacity,
-          near,
-          far,
           count,
           splatEncoding?.lnScaleMin ?? LN_SCALE_MIN,
           splatEncoding?.lnScaleMax ?? LN_SCALE_MAX,
           splatEncoding?.lodOpacity ?? false,
         );
-        intersections = this.appendRaycastBuffer(
-          intersections,
-          newIntersections,
-        );
+        samples = this.appendRaycastBuffer(samples, profiles);
       }
     } else {
       const buffer2 = get_raycast_buffer2();
@@ -1115,13 +1125,6 @@ export class SplatMesh extends SplatGenerator {
         : indices
           ? this.extSplats?.lodSplats?.extArrays[1]
           : this.extSplats?.extArrays[1];
-
-      const labels = paged 
-        ? (this.paged?.pager?.labelTexture.value.image.data as Uint32Array) 
-        : undefined;
-      const labelsLookUp = paged 
-      ? (this.paged?.pager?.lookUpTexture.value.image.data as Uint32Array) 
-      : undefined;
 
       if (!ext1 || !ext2) {
         return;
@@ -1145,18 +1148,19 @@ export class SplatMesh extends SplatGenerator {
             buffer2[i4 + 1] = ext2[index4 + 1];
             buffer2[i4 + 2] = ext2[index4 + 2];
             buffer2[i4 + 3] = ext2[index4 + 3];
+          }
+        }
 
-            if (labels !== undefined && labelsLookUp !== undefined) {
-              const label = labels[index];
-              const visible = labelsLookUp[label] > 0;
-              if (!visible) {
-                buffer[i4 + 3] = 0;
-              }
+        if (labels !== undefined && labelsLookUp !== undefined) {
+          for (let i = 0; i < count; ++i) {
+            const index = indices ? indices[base + i] : base + i;
+            if (labelsLookUp[labels[index]] === 0) {
+              buffer[i * 4 + 3] = 0;
             }
           }
         }
 
-        const newIntersections = raycast_ext_buffers(
+        const profiles = raycast_ext_buffers(
           origin.x,
           origin.y,
           origin.z,
@@ -1164,18 +1168,18 @@ export class SplatMesh extends SplatGenerator {
           direction.y,
           direction.z,
           this.minRaycastOpacity,
-          near,
-          far,
           count,
         );
-        intersections = this.appendRaycastBuffer(
-          intersections,
-          newIntersections,
-        );
+        samples = this.appendRaycastBuffer(samples, profiles);
       }
     }
 
-    for (const distance of SplatMesh.raycastBuffer.subarray(0, intersections)) {
+    const distance = raycast_surface_depth(
+      SplatMesh.raycastBuffer.subarray(0, samples),
+      near,
+      far,
+    );
+    if (distance !== undefined) {
       const point = ray.direction
         .clone()
         .multiplyScalar(distance)

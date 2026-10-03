@@ -12,6 +12,7 @@ use crate::{decoder::ChunkDecoder, packed_splats::PackedSplatsData};
 
 mod raycast;
 use raycast::{raycast_packed_ellipsoids, raycast_ext_ellipsoids};
+mod surface_depth;
 
 mod sort;
 use sort::{sort_internal, SortBuffers, sort32_internal, Sort32Buffers};
@@ -482,7 +483,7 @@ pub fn bhatt_lod_extsplats(num_splats: u32, ext1: Uint32Array, ext2: Uint32Array
 const RAYCAST_BUFFER_COUNT: usize = 65536;
 
 thread_local! {
-    static RAYCAST_BUFFERS: RefCell<(Vec<u32>, Vec<u32>, Vec<f32>)> = RefCell::new((vec![0; RAYCAST_BUFFER_COUNT * 4], vec![0; RAYCAST_BUFFER_COUNT * 4], vec![0.0; RAYCAST_BUFFER_COUNT]));
+    static RAYCAST_BUFFERS: RefCell<(Vec<u32>, Vec<u32>, Vec<f32>)> = RefCell::new((vec![0; RAYCAST_BUFFER_COUNT * 4], vec![0; RAYCAST_BUFFER_COUNT * 4], vec![0.0; RAYCAST_BUFFER_COUNT * 3]));
 }
 
 #[wasm_bindgen]
@@ -503,11 +504,11 @@ pub fn get_raycast_buffer2() -> Uint32Array {
 pub fn raycast_packed_buffer(
     origin_x: f32, origin_y: f32, origin_z: f32,
     dir_x: f32, dir_y: f32, dir_z: f32,
-    min_opacity: f32, near: f32, far: f32,
+    min_opacity: f32,
     count: u32,
     ln_scale_min: f32, ln_scale_max: f32, lod_opacity: bool,
 ) -> Float32Array {
-    RAYCAST_BUFFERS.with_borrow_mut(|(buffer, _, distances)| {
+    RAYCAST_BUFFERS.with_borrow_mut(|(buffer, _, samples)| {
         let encoding = SplatEncoding {
             ln_scale_min,
             ln_scale_max,
@@ -515,15 +516,15 @@ pub fn raycast_packed_buffer(
             ..Default::default()
         };
 
-        distances.clear();
+        samples.clear();
         let subbuffer = &buffer[0..(4 * count as usize)];
         raycast_packed_ellipsoids(
-            subbuffer, distances,
+            subbuffer, samples,
             [origin_x, origin_y, origin_z], [dir_x, dir_y, dir_z],
-            min_opacity, near, far, &encoding,
+            min_opacity, &encoding,
         );
 
-        unsafe { Float32Array::view(&distances) }
+        unsafe { Float32Array::view(&samples) }
     })
 }
 
@@ -531,21 +532,33 @@ pub fn raycast_packed_buffer(
 pub fn raycast_ext_buffers(
     origin_x: f32, origin_y: f32, origin_z: f32,
     dir_x: f32, dir_y: f32, dir_z: f32,
-    min_opacity: f32, near: f32, far: f32,
+    min_opacity: f32,
     count: u32,
 ) -> Float32Array {
-    RAYCAST_BUFFERS.with_borrow_mut(|(buffer, buffer2, distances)| {
-        distances.clear();
+    RAYCAST_BUFFERS.with_borrow_mut(|(buffer, buffer2, samples)| {
+        samples.clear();
         let subbuffer = &buffer[0..(4 * count as usize)];
         let subbuffer2 = &buffer2[0..(4 * count as usize)];
         raycast_ext_ellipsoids(
-            subbuffer, subbuffer2, distances,
+            subbuffer, subbuffer2, samples,
             [origin_x, origin_y, origin_z], [dir_x, dir_y, dir_z],
-            min_opacity, near, far,
+            min_opacity,
         );
 
-        unsafe { Float32Array::view(&distances) }
+        unsafe { Float32Array::view(&samples) }
     })
+}
+
+#[wasm_bindgen]
+pub fn raycast_surface_depth(samples: Float32Array, near: f32, far: f32) -> Option<f32> {
+    sample_surface_depth(&samples.to_vec(), near, far)
+}
+
+fn sample_surface_depth(samples: &[f32], near: f32, far: f32) -> Option<f32> {
+    let profiles = samples.chunks_exact(3).map(|sample| surface_depth::RayProfile {
+        depth: sample[0], alpha: sample[1], sigma: sample[2],
+    }).collect::<Vec<_>>();
+    surface_depth::surface_depth(&profiles, near, far)
 }
 
 #[wasm_bindgen]
@@ -556,7 +569,7 @@ pub fn raycast_packed_splats(
     num_splats: u32, packed_splats: Uint32Array,
     ln_scale_min: f32, ln_scale_max: f32, lod_opacity: bool,
 ) -> Float32Array {
-    let mut distances = Vec::<f32>::new();
+    let mut samples = Vec::<f32>::new();
     let encoding = SplatEncoding {
         ln_scale_min,
         ln_scale_max,
@@ -573,18 +586,17 @@ pub fn raycast_packed_splats(
             subarray.copy_to(subbuffer);
 
             raycast_packed_ellipsoids(
-                subbuffer, &mut distances,
+                subbuffer, &mut samples,
                 [origin_x, origin_y, origin_z], [dir_x, dir_y, dir_z],
-                min_opacity, near, far, &encoding,
+                min_opacity, &encoding,
             );
 
             base += chunk_size;
         }
     });
 
-    let output = Float32Array::new_with_length(distances.len() as u32);
-    output.copy_from(&distances);
-    output
+    let depth = sample_surface_depth(&samples, near, far);
+    Float32Array::from(depth.as_slice())
 }
 
 #[wasm_bindgen]
