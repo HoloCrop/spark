@@ -63,12 +63,6 @@ fn raycast_ellipsoid(
 
     let min_scale = scale[0].max(scale[1]).max(scale[2]) * 0.01;
 
-    
-    let thin_count = [scale[0], scale[1], scale[2]].iter().filter(|&&s| s < min_scale).count();
-    if thin_count >= 2 {
-        web_sys::console::log_1(&format!("needle splat: scale={:?}", scale).into());
-    }
-
     if scale[2] < min_scale {
         // Treat it as a flat elliptical disk
         if local_dir[2].abs() < 1e-6 {
