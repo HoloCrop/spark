@@ -51,6 +51,12 @@ import {
 } from "./dyno";
 import * as wasm from "./wasm";
 
+declare module "three" {
+  interface RaycasterParameters {
+    SplatMesh?: { surfaceAlpha?: number };
+  }
+}
+
 export type SplatMeshOptions = {
   // URL to fetch a Gaussian splat file from(supports .ply, .splat, .ksplat,
   // .spz formats). (default: undefined)
@@ -1010,7 +1016,7 @@ export class SplatMesh extends SplatGenerator {
     this.onFrame?.({ mesh: this, time, deltaTime });
   }
 
-  // Append the combined k=2 transmittance's 0.5 surface crossing to intersects.
+  // Append the combined k=2 opacity crossing (0.5 by default) to intersects.
   raycast(
     raycaster: THREE.Raycaster,
     intersects: {
@@ -1201,6 +1207,7 @@ export class SplatMesh extends SplatGenerator {
       SplatMesh.raycastBuffer.subarray(0, samples),
       near,
       far,
+      raycaster.params.SplatMesh?.surfaceAlpha ?? 0.5,
     );
     if (distance !== undefined) {
       const point = ray.direction

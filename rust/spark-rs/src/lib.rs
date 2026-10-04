@@ -568,15 +568,15 @@ fn raycast_projection(camera_from_mesh: Option<Float32Array>) -> Option<RaycastP
 }
 
 #[wasm_bindgen]
-pub fn raycast_surface_depth(samples: Float32Array, near: f32, far: f32) -> Option<f32> {
-    sample_surface_depth(&samples.to_vec(), near, far)
+pub fn raycast_surface_depth(samples: Float32Array, near: f32, far: f32, surface_alpha: Option<f32>) -> Option<f32> {
+    sample_surface_depth(&samples.to_vec(), near, far, surface_alpha.unwrap_or(0.5))
 }
 
-fn sample_surface_depth(samples: &[f32], near: f32, far: f32) -> Option<f32> {
+fn sample_surface_depth(samples: &[f32], near: f32, far: f32, surface_alpha: f32) -> Option<f32> {
     let profiles = samples.chunks_exact(3).map(|sample| surface_depth::RayProfile {
         depth: sample[0], alpha: sample[1], sigma: sample[2],
     }).collect::<Vec<_>>();
-    surface_depth::surface_depth(&profiles, near, far)
+    surface_depth::surface_depth(&profiles, near, far, surface_alpha)
 }
 
 #[wasm_bindgen]
@@ -613,7 +613,7 @@ pub fn raycast_packed_splats(
         }
     });
 
-    let depth = sample_surface_depth(&samples, near, far);
+    let depth = sample_surface_depth(&samples, near, far, 0.5);
     Float32Array::from(depth.as_slice())
 }
 

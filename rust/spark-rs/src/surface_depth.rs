@@ -42,7 +42,7 @@ fn log_transmittance(profiles: &[RayProfile], depth: f64, side: DepthSide) -> f6
     }).sum()
 }
 
-pub fn surface_depth(profiles: &[RayProfile], near: f32, far: f32) -> Option<f32> {
+pub fn surface_depth(profiles: &[RayProfile], near: f32, far: f32, surface_alpha: f32) -> Option<f32> {
     if profiles.is_empty() {
         return None;
     }
@@ -52,7 +52,7 @@ pub fn surface_depth(profiles: &[RayProfile], near: f32, far: f32) -> Option<f32
     let mut upper = profiles.iter().map(|profile| {
         f64::from(profile.depth) + PROFILE_REACH * f64::from(profile.sigma)
     }).fold(f64::NEG_INFINITY, f64::max).min(f64::from(far));
-    let target = 0.5_f64.ln();
+    let target = (-f64::from(surface_alpha)).ln_1p();
     // One-sided endpoints bracket exact zero-width jumps as well as smooth crossings.
     if lower > upper || log_transmittance(profiles, lower, DepthSide::Front) < target
         || log_transmittance(profiles, upper, DepthSide::Back) > target

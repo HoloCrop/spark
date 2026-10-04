@@ -8,6 +8,13 @@ import { SplatSkinning } from './SplatSkinning';
 import { SplatEncoding, SplatFileType } from './defines';
 import { DynoBool, DynoFloat, DynoInt, DynoUsampler2D, DynoVal, DynoVec4, Gsplat } from './dyno';
 import * as THREE from "three";
+declare module "three" {
+    interface RaycasterParameters {
+        SplatMesh?: {
+            surfaceAlpha?: number;
+        };
+    }
+}
 export type SplatMeshOptions = {
     url?: string;
     fileBytes?: Uint8Array | ArrayBuffer;

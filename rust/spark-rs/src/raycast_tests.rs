@@ -82,9 +82,9 @@ fn faint_edge_layers_jointly_reach_the_surface_threshold() {
         &splat.repeat(250), &scales.repeat(250), &mut profiles,
         [1.6, 0.0, 0.0], [0.0, 0.0, 1.0], 0.0, None,
     );
-    let depth = crate::sample_surface_depth(&profiles, 0.0, 10.0).unwrap();
+    let depth = crate::sample_surface_depth(&profiles, 0.0, 10.0, 0.5).unwrap();
     assert!((depth - 5.1063).abs() < 0.001);
-    assert_eq!(crate::sample_surface_depth(&profiles[..150 * 3], 0.0, 10.0), None);
+    assert_eq!(crate::sample_surface_depth(&profiles[..150 * 3], 0.0, 10.0, 0.5), None);
 }
 
 #[test]
@@ -98,7 +98,7 @@ fn perspective_tilted_edges_use_projected_coverage_and_triton_depth() {
             let profile = raycast_gaussian(
                 [0.0; 3], direction, 0.8, [0.0, 0.0, 5.0], [1.0, 0.1, 0.001], quaternion, 0.0, Some(&projection),
             ).unwrap();
-            let depth = crate::sample_surface_depth(&[profile.depth, profile.alpha, profile.sigma], 0.0, 10.0);
+            let depth = crate::sample_surface_depth(&[profile.depth, profile.alpha, profile.sigma], 0.0, 10.0, 0.5);
             if radius == 0.9 {
                 assert!((depth.unwrap() - expected).abs() < 3e-5);
             } else {
@@ -118,7 +118,7 @@ fn perspective_nonuniform_mesh_transform_keeps_world_depth_and_sigma() {
         [0.0; 3], direction.as_vec3().to_array(), 0.8, [1.0, 0.0, 5.0], [1.0, 0.1, 0.001],
         [0.0, angle.sin(), 0.0, angle.cos()], 0.0, Some(&projection),
     ).unwrap();
-    let depth = crate::sample_surface_depth(&[profile.depth, profile.alpha, profile.sigma], 0.0, 10.0).unwrap();
+    let depth = crate::sample_surface_depth(&[profile.depth, profile.alpha, profile.sigma], 0.0, 10.0, 0.5).unwrap();
     assert!((depth - 4.5257233).abs() < 3e-5);
     assert!((profile.sigma - 0.0010542323).abs() < 1e-7);
 }
@@ -138,7 +138,7 @@ fn camera_clipped_sources_do_not_occlude_visible_surfaces() {
     raycast_ext_ellipsoids(
         &splats, &scales, &mut profiles, [0.0; 3], [0.0, 0.0, 1.0], 0.0, Some(&projection),
     );
-    let depth = crate::sample_surface_depth(&profiles, 0.01, 100.0).unwrap();
+    let depth = crate::sample_surface_depth(&profiles, 0.01, 100.0, 0.5).unwrap();
     assert!((depth - 4.850357).abs() < 3e-5);
     profiles.clear();
     raycast_ext_ellipsoids(
@@ -147,7 +147,7 @@ fn camera_clipped_sources_do_not_occlude_visible_surfaces() {
     raycast_ext_ellipsoids(
         &splats[8..], &scales[8..], &mut profiles, [0.0; 3], [0.0, 0.0, 1.0], 0.0, Some(&projection),
     );
-    assert_eq!(crate::sample_surface_depth(&profiles, 0.01, 100.0), None);
+    assert_eq!(crate::sample_surface_depth(&profiles, 0.01, 100.0, 0.5), None);
 }
 
 #[test]
@@ -169,12 +169,12 @@ fn real_rad_camera_clipped_sources_cannot_create_viewer_ghost_points() {
             let direction = DVec3::new(-1.0, offset / 3.0_f64.sqrt(), 0.0).normalize().as_vec3().to_array();
             raycast_ext_ellipsoids(&source, &geometry, &mut profiles, camera, direction, 0.0, Some(&projection));
         }
-        assert_eq!(crate::sample_surface_depth(&profiles, 0.01, 100.0), None);
+        assert_eq!(crate::sample_surface_depth(&profiles, 0.01, 100.0, 0.5), None);
         let mut visible = [0; 4];
         let mut shape = [0; 4];
         encode_ext_splat(&mut visible, &mut shape, [69.0, 45.0, 1.5], 0.8, [1.0; 3], [0.25, 1.0, 1.0], IDENTITY);
         raycast_ext_ellipsoids(&visible, &shape, &mut profiles, camera, [-1.0, 0.0, 0.0], 0.0, Some(&projection));
-        let depth = crate::sample_surface_depth(&profiles, 0.01, 100.0).unwrap();
+        let depth = crate::sample_surface_depth(&profiles, 0.01, 100.0, 0.5).unwrap();
         assert!((depth - 4.850357).abs() < 3e-5);
     }
 }
@@ -215,7 +215,7 @@ fn profiles_wholly_behind_origin_do_not_hide_foreground_surface() {
     raycast_ext_ellipsoids(&extended, &extended_scale, &mut profiles, [0.0; 3], [0.0, 0.0, 1.0], 0.0, None);
     assert_eq!(profiles.len(), 3);
     assert_eq!(profiles[0], 10.0);
-    let depth = crate::sample_surface_depth(&profiles, 0.0, 20.0).unwrap();
+    let depth = crate::sample_surface_depth(&profiles, 0.0, 20.0, 0.5).unwrap();
     assert!((depth - 9.9136773).abs() < 2e-5);
 }
 
