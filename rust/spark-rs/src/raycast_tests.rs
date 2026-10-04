@@ -89,7 +89,7 @@ fn faint_edge_layers_jointly_reach_the_surface_threshold() {
 
 #[test]
 fn perspective_tilted_edges_use_projected_coverage_and_triton_depth() {
-    let projection = RaycastProjection { camera_from_mesh: DMat3::IDENTITY };
+    let projection = RaycastProjection { camera_from_mesh: DMat3::IDENTITY, near: 0.01, far: 100.0, image_from_camera: [1.0, 1.0, 0.0, 0.0] };
     let angle = std::f32::consts::FRAC_PI_8;
     let quaternion = [0.0, angle.sin(), 0.0, angle.cos()];
     for (sign, expected) in [(-1.0, 5.6834255), (1.0, 4.4003675)] {
@@ -111,7 +111,7 @@ fn perspective_tilted_edges_use_projected_coverage_and_triton_depth() {
 #[test]
 fn perspective_nonuniform_mesh_transform_keeps_world_depth_and_sigma() {
     let basis = DMat3::from_diagonal(DVec3::new(2.0, 1.5, 0.75));
-    let projection = RaycastProjection { camera_from_mesh: basis };
+    let projection = RaycastProjection { camera_from_mesh: basis, near: 0.01, far: 100.0, image_from_camera: [1.0, 1.0, 0.0, 0.0] };
     let direction = basis.inverse() * DVec3::new(0.65, 0.01, 1.0).normalize();
     let angle = std::f32::consts::FRAC_PI_8;
     let profile = raycast_gaussian(
@@ -121,6 +121,62 @@ fn perspective_nonuniform_mesh_transform_keeps_world_depth_and_sigma() {
     let depth = crate::sample_surface_depth(&[profile.depth, profile.alpha, profile.sigma], 0.0, 10.0).unwrap();
     assert!((depth - 4.5257233).abs() < 3e-5);
     assert!((profile.sigma - 0.0010542323).abs() < 1e-7);
+}
+
+#[test]
+fn camera_clipped_sources_do_not_occlude_visible_surfaces() {
+    let projection = RaycastProjection { camera_from_mesh: DMat3::IDENTITY, near: 0.01, far: 100.0, image_from_camera: [1.0, 1.0, 0.0, 0.0] };
+    let mut splats = [0; 12];
+    let mut scales = [0; 12];
+    for (index, depth, width) in [(0, 0.0001, 0.00001), (1, 5.0, 0.25), (2, 100.1, 10.0)] {
+        encode_ext_splat(
+            &mut splats[index * 4..index * 4 + 4], &mut scales[index * 4..index * 4 + 4],
+            [0.0, 0.0, depth], 0.8, [1.0; 3], [1.0, 1.0, width], IDENTITY,
+        );
+    }
+    let mut profiles = Vec::new();
+    raycast_ext_ellipsoids(
+        &splats, &scales, &mut profiles, [0.0; 3], [0.0, 0.0, 1.0], 0.0, Some(&projection),
+    );
+    let depth = crate::sample_surface_depth(&profiles, 0.01, 100.0).unwrap();
+    assert!((depth - 4.850357).abs() < 3e-5);
+    profiles.clear();
+    raycast_ext_ellipsoids(
+        &splats[..4], &scales[..4], &mut profiles, [0.0; 3], [0.0, 0.0, 1.0], 0.0, Some(&projection),
+    );
+    raycast_ext_ellipsoids(
+        &splats[8..], &scales[8..], &mut profiles, [0.0; 3], [0.0, 0.0, 1.0], 0.0, Some(&projection),
+    );
+    assert_eq!(crate::sample_surface_depth(&profiles, 0.01, 100.0), None);
+}
+
+#[test]
+fn real_rad_camera_clipped_sources_cannot_create_viewer_ghost_points() {
+    let projection = RaycastProjection {
+        camera_from_mesh: DMat3::from_cols_array(&[0.0, 0.0, -1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+        near: 0.01, far: 100.0,
+        image_from_camera: [3.0_f64.sqrt(), 3.0_f64.sqrt(), 0.0, 0.0],
+    };
+    let camera = [74.0, 45.0, 1.5];
+    // RAD 218360: one mean before near, another inside depth bounds but far outside the image.
+    let sources = [
+        ([1116995531, 1110297876, 1023686739, 15590], [945043271, 3292149469, 3300508815, 4041825187]),
+        ([1116993444, 1110328262, 1017776664, 15507], [922826143, 3282122037, 3299132474, 2929726427]),
+    ];
+    for (source, geometry) in sources {
+        let mut profiles = Vec::new();
+        for offset in [0.0, -0.8] {
+            let direction = DVec3::new(-1.0, offset / 3.0_f64.sqrt(), 0.0).normalize().as_vec3().to_array();
+            raycast_ext_ellipsoids(&source, &geometry, &mut profiles, camera, direction, 0.0, Some(&projection));
+        }
+        assert_eq!(crate::sample_surface_depth(&profiles, 0.01, 100.0), None);
+        let mut visible = [0; 4];
+        let mut shape = [0; 4];
+        encode_ext_splat(&mut visible, &mut shape, [69.0, 45.0, 1.5], 0.8, [1.0; 3], [0.25, 1.0, 1.0], IDENTITY);
+        raycast_ext_ellipsoids(&visible, &shape, &mut profiles, camera, [-1.0, 0.0, 0.0], 0.0, Some(&projection));
+        let depth = crate::sample_surface_depth(&profiles, 0.01, 100.0).unwrap();
+        assert!((depth - 4.850357).abs() < 3e-5);
+    }
 }
 
 #[test]

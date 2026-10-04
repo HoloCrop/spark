@@ -8,6 +8,9 @@ use crate::surface_depth::{ALPHA_THRESHOLD, MAX_ALPHA, PROFILE_REACH, RayProfile
 #[derive(Clone, Copy)]
 pub struct RaycastProjection {
     pub camera_from_mesh: DMat3,
+    pub near: f64,
+    pub far: f64,
+    pub image_from_camera: [f64; 4],
 }
 
 impl RaycastProjection {
@@ -17,11 +20,17 @@ impl RaycastProjection {
         let scale = DVec3::from_array(scale.map(f64::from));
         let quat = DQuat::from_array(quat.map(f64::from));
         let center = -(self.camera_from_mesh * origin);
-        if center.z <= 0.0 {
+        if center.z <= self.near || center.z >= self.far {
+            return None;
+        }
+        let inverse_depth = center.z.recip();
+        let [focal_x, focal_y, offset_x, offset_y] = self.image_from_camera;
+        if (focal_x * center.x * inverse_depth - offset_x).abs() > 1.4
+            || (focal_y * center.y * inverse_depth - offset_y).abs() > 1.4
+        {
             return None;
         }
         let basis = self.camera_from_mesh * DMat3::from_quat(quat) * DMat3::from_diagonal(scale);
-        let inverse_depth = center.z.recip();
         let projected_x = basis.transpose() * DVec3::new(inverse_depth, 0.0, -center.x * inverse_depth * inverse_depth);
         let projected_y = basis.transpose() * DVec3::new(0.0, inverse_depth, -center.y * inverse_depth * inverse_depth);
         // Evaluate the conic without cancellation between nearly parallel projected axes.

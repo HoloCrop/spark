@@ -558,7 +558,12 @@ fn raycast_projection(camera_from_mesh: Option<Float32Array>) -> Option<RaycastP
         let values = std::array::from_fn(|index| {
             f64::from(basis.get_index(index as u32)) * if index % 3 == 2 { -1.0 } else { 1.0 }
         });
-        RaycastProjection { camera_from_mesh: glam::DMat3::from_cols_array(&values) }
+        RaycastProjection {
+            camera_from_mesh: glam::DMat3::from_cols_array(&values),
+            near: f64::from(basis.get_index(9)),
+            far: f64::from(basis.get_index(10)),
+            image_from_camera: std::array::from_fn(|index| f64::from(basis.get_index(11 + index as u32))),
+        }
     })
 }
 

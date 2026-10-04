@@ -1032,7 +1032,8 @@ export class SplatMesh extends SplatGenerator {
       ? (this.paged?.pager?.extSplats ?? false)
       : this.extSplats != null;
 
-    const { near, far, ray } = raycaster;
+    const { ray } = raycaster;
+    let { near, far } = raycaster;
     const worldToMesh = this.matrixWorld.clone().invert();
     const worldToMeshRot = new THREE.Matrix3().setFromMatrix4(worldToMesh);
     const origin = ray.origin.clone().applyMatrix4(worldToMesh);
@@ -1043,9 +1044,19 @@ export class SplatMesh extends SplatGenerator {
         raycaster.camera.matrixWorldInverse,
         this.matrixWorld,
       );
-      projection = new Float32Array(
-        new THREE.Matrix3().setFromMatrix4(meshToView).elements,
-      );
+      projection = new Float32Array([
+        ...new THREE.Matrix3().setFromMatrix4(meshToView).elements,
+        raycaster.camera.near,
+        raycaster.camera.far,
+        raycaster.camera.projectionMatrix.elements[0],
+        raycaster.camera.projectionMatrix.elements[5],
+        raycaster.camera.projectionMatrix.elements[8],
+        raycaster.camera.projectionMatrix.elements[9],
+      ]);
+      const forward = -ray.direction.clone()
+        .transformDirection(raycaster.camera.matrixWorldInverse).z;
+      near = Math.max(near, raycaster.camera.near / forward);
+      far = Math.min(far, raycaster.camera.far / forward);
     }
 
     const buffer = get_raycast_buffer();
