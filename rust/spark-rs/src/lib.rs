@@ -11,7 +11,7 @@ use crate::ext_splats::ExtSplatsData;
 use crate::{decoder::ChunkDecoder, packed_splats::PackedSplatsData};
 
 mod raycast;
-use raycast::{raycast_packed_ellipsoids, raycast_ext_ellipsoids};
+use raycast::{RaycastProjection, raycast_packed_ellipsoids, raycast_ext_ellipsoids};
 mod surface_depth;
 
 mod sort;
@@ -507,7 +507,9 @@ pub fn raycast_packed_buffer(
     min_opacity: f32,
     count: u32,
     ln_scale_min: f32, ln_scale_max: f32, lod_opacity: bool,
+    camera_from_mesh: Option<Float32Array>,
 ) -> Float32Array {
+    let projection = raycast_projection(camera_from_mesh);
     RAYCAST_BUFFERS.with_borrow_mut(|(buffer, _, samples)| {
         let encoding = SplatEncoding {
             ln_scale_min,
@@ -521,7 +523,7 @@ pub fn raycast_packed_buffer(
         raycast_packed_ellipsoids(
             subbuffer, samples,
             [origin_x, origin_y, origin_z], [dir_x, dir_y, dir_z],
-            min_opacity, &encoding,
+            min_opacity, &encoding, projection.as_ref(),
         );
 
         unsafe { Float32Array::view(&samples) }
@@ -534,7 +536,9 @@ pub fn raycast_ext_buffers(
     dir_x: f32, dir_y: f32, dir_z: f32,
     min_opacity: f32,
     count: u32,
+    camera_from_mesh: Option<Float32Array>,
 ) -> Float32Array {
+    let projection = raycast_projection(camera_from_mesh);
     RAYCAST_BUFFERS.with_borrow_mut(|(buffer, buffer2, samples)| {
         samples.clear();
         let subbuffer = &buffer[0..(4 * count as usize)];
@@ -542,10 +546,19 @@ pub fn raycast_ext_buffers(
         raycast_ext_ellipsoids(
             subbuffer, subbuffer2, samples,
             [origin_x, origin_y, origin_z], [dir_x, dir_y, dir_z],
-            min_opacity,
+            min_opacity, projection.as_ref(),
         );
 
         unsafe { Float32Array::view(&samples) }
+    })
+}
+
+fn raycast_projection(camera_from_mesh: Option<Float32Array>) -> Option<RaycastProjection> {
+    camera_from_mesh.map(|basis| {
+        let values = std::array::from_fn(|index| {
+            f64::from(basis.get_index(index as u32)) * if index % 3 == 2 { -1.0 } else { 1.0 }
+        });
+        RaycastProjection { camera_from_mesh: glam::DMat3::from_cols_array(&values) }
     })
 }
 
@@ -588,7 +601,7 @@ pub fn raycast_packed_splats(
             raycast_packed_ellipsoids(
                 subbuffer, &mut samples,
                 [origin_x, origin_y, origin_z], [dir_x, dir_y, dir_z],
-                min_opacity, &encoding,
+                min_opacity, &encoding, None,
             );
 
             base += chunk_size;

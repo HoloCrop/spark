@@ -1037,6 +1037,16 @@ export class SplatMesh extends SplatGenerator {
     const worldToMeshRot = new THREE.Matrix3().setFromMatrix4(worldToMesh);
     const origin = ray.origin.clone().applyMatrix4(worldToMesh);
     const direction = ray.direction.clone().applyMatrix3(worldToMeshRot);
+    let projection: Float32Array | undefined;
+    if (raycaster.camera instanceof THREE.PerspectiveCamera) {
+      const meshToView = new THREE.Matrix4().multiplyMatrices(
+        raycaster.camera.matrixWorldInverse,
+        this.matrixWorld,
+      );
+      projection = new Float32Array(
+        new THREE.Matrix3().setFromMatrix4(meshToView).elements,
+      );
+    }
 
     const buffer = get_raycast_buffer();
     const bufferSize = buffer.length / 4;
@@ -1110,6 +1120,7 @@ export class SplatMesh extends SplatGenerator {
           splatEncoding?.lnScaleMin ?? LN_SCALE_MIN,
           splatEncoding?.lnScaleMax ?? LN_SCALE_MAX,
           splatEncoding?.lodOpacity ?? false,
+          projection,
         );
         samples = this.appendRaycastBuffer(samples, profiles);
       }
@@ -1169,6 +1180,7 @@ export class SplatMesh extends SplatGenerator {
           direction.z,
           this.minRaycastOpacity,
           count,
+          projection,
         );
         samples = this.appendRaycastBuffer(samples, profiles);
       }

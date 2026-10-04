@@ -1,5 +1,5 @@
 pub const MAX_ALPHA: f32 = 0.99;
-pub const ALPHA_THRESHOLD: f32 = 1.0 / 255.0;
+pub const ALPHA_THRESHOLD: f32 = 0.5 / 255.0;
 pub const PROFILE_REACH: f64 = 3.851_285_106_843_081_3; // 220^(1/4), matching Triton's depth profile.
 
 #[derive(Clone, Copy)]
