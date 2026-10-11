@@ -38,6 +38,8 @@
     "site:deploy": "npm run site:build && node scripts/deploy-site.js",
     "site:serve": "node scripts/serve-site.js site",
     "start": "npm run dev",
+    "bench:raycast": "node scripts/test-raycast.mjs bench/raycast.ts",
+    "test:raycast": "node scripts/test-raycast.mjs",
     "test": "node --no-warnings --loader ts-node/esm --test test/**/*.test.ts"
   },
   "repository": "sparkjs-dev/spark",

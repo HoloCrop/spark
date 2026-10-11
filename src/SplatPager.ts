@@ -23,6 +23,7 @@ import {
   uploadU32DataTextureRows,
 } from "./utils";
 import * as wasm from "./wasm";
+import { SplatRaycastBlocks } from "./SplatRaycastBlocks";
 
 export interface PagedSplatsOptions {
   pager?: SplatPager;
@@ -515,6 +516,7 @@ interface PageUpload {
 }
 
 export class SplatPager {
+  readonly raycastBlocks = new SplatRaycastBlocks();
   readonly renderer: THREE.WebGLRenderer;
 
   readonly extSplats: boolean;
@@ -927,6 +929,7 @@ export class SplatPager {
   dispose() {
     this.autoDrive = false;
     this.numFetchers = 0;
+    this.raycastBlocks.dispose();
 
     this.packedTexture.value.dispose();
     this.packedTexture.value.source.data = null;
@@ -1102,6 +1105,7 @@ export class SplatPager {
       this.splatsChunkToPage.delete(splats);
     }
 
+    this.raycastBlocks.remove(page);
     this.pageToSplatsChunk[page] = undefined;
     while (
       this.pageToSplatsChunk.length > 0 &&
@@ -1123,6 +1127,7 @@ export class SplatPager {
       const chunk = chunks.pop();
       if (chunk) {
         const { page } = chunk;
+        this.raycastBlocks.remove(page);
         this.pageToSplatsChunk[page] = undefined;
         freedPages.add(page);
         this.pageFreelist.push(page);
@@ -1150,6 +1155,7 @@ export class SplatPager {
     if (extArray) {
       uploadTextureLayer(this.extTexture, page, pageBase * 4, extArray);
     }
+    this.raycastBlocks.update(this, page);
 
     // In case of extSplats there can be 4 shArrays for 3 sh degrees
     const numSh = Math.min(shArrays.length, 3);

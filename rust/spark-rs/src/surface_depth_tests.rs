@@ -1,4 +1,4 @@
-use super::{RayProfile, surface_depth};
+use super::{RayProfile, surface_contributor, surface_depth};
 
 fn profile(depth: f32, alpha: f32, sigma: f32) -> RayProfile {
     RayProfile { depth, alpha, sigma }
@@ -61,4 +61,24 @@ fn zero_width_profiles_cross_at_the_limiting_step() {
     assert_depth(&[profile(4.0, 0.3, 0.0), profile(5.0, 0.3, 0.0)], 5.0);
     assert_eq!(surface_depth(&[profile(5.0, 0.8, 0.0)], 5.0, 5.0), Some(5.0));
     assert_eq!(surface_depth(&[profile(5.0, 0.8, 0.0)], 5.1, 6.0), None);
+}
+
+#[test]
+fn surface_identity_comes_from_the_contributor_at_the_measured_depth() {
+    let profiles = [profile(2.0, 0.1, 0.1), profile(5.0, 0.8, 0.1)];
+    let depth = surface_depth(&profiles, 0.0, 10.0).unwrap();
+    assert_eq!(surface_contributor(&profiles, depth), 1);
+    let reversed = [profiles[1], profiles[0]];
+    assert_eq!(surface_depth(&reversed, 0.0, 10.0), Some(depth));
+    assert_eq!(surface_contributor(&reversed, depth), 0);
+}
+
+#[test]
+fn surface_identity_handles_overlapping_and_zero_width_profiles() {
+    let profiles = [profile(5.0, 0.3, 0.1), profile(5.0, 0.6, 0.1)];
+    let depth = surface_depth(&profiles, 0.0, 10.0).unwrap();
+    assert_eq!(surface_contributor(&profiles, depth), 1);
+    let planes = [profile(4.0, 0.3, 0.0), profile(5.0, 0.8, 0.0)];
+    let depth = surface_depth(&planes, 0.0, 10.0).unwrap();
+    assert_eq!(surface_contributor(&planes, depth), 1);
 }

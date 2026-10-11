@@ -3,9 +3,11 @@ import * as THREE from "three";
 import {
   get_raycast_buffer,
   get_raycast_buffer2,
+  get_raycast_indices,
   raycast_ext_buffers,
   raycast_packed_buffer,
   raycast_surface_depth,
+  raycast_surface_index,
 } from "spark-rs";
 import { ExtSplats } from "./ExtSplats";
 import { PackedSplats } from "./PackedSplats";
@@ -1017,6 +1019,7 @@ export class SplatMesh extends SplatGenerator {
       distance: number;
       point: THREE.Vector3;
       object: THREE.Object3D;
+      index: number;
     }[],
   ) {
     if (
@@ -1059,15 +1062,11 @@ export class SplatMesh extends SplatGenerator {
       far = Math.min(far, raycaster.camera.far / forward);
     }
 
-    const buffer = get_raycast_buffer();
-    const bufferSize = buffer.length / 4;
-    let samples = 0;
-
-    const numSplats =
+    let numSplats =
       this.raycastIndices?.numSplats ??
       (paged ? this.paged?.numSplats : this.context.numSplats.value) ??
       0;
-    const indices =
+    let indices =
       this.raycastIndices?.indices ??
       (paged
         ? (this.paged?.dynoIndices.value.image.data as Uint32Array)
@@ -1075,6 +1074,17 @@ export class SplatMesh extends SplatGenerator {
           ? (this.context.lodIndices.value.image.data as Uint32Array)
           : null) ??
       null;
+    if (this.paged?.pager && projection && !this.raycastIndices) {
+      indices = this.paged.pager.raycastBlocks.query(
+        this.paged.pager, indices!.subarray(0, numSplats), projection,
+        origin.toArray(), direction.toArray(),
+      );
+      numSplats = indices.length;
+    }
+    // Querying the index may grow Wasm memory: acquire its scratch views afterwards.
+    const buffer = get_raycast_buffer();
+    const bufferSize = buffer.length / 4;
+    let samples = 0;
     const labels = this.paged?.pager?.labelTexture.value.image.data as
       | Uint32Array
       | undefined;
@@ -1133,7 +1143,7 @@ export class SplatMesh extends SplatGenerator {
           splatEncoding?.lodOpacity ?? false,
           projection,
         );
-        samples = this.appendRaycastBuffer(samples, profiles);
+        samples = this.appendRaycastBuffer(samples, profiles, get_raycast_indices(), base, indices);
       }
     } else {
       const buffer2 = get_raycast_buffer2();
@@ -1193,7 +1203,7 @@ export class SplatMesh extends SplatGenerator {
           count,
           projection,
         );
-        samples = this.appendRaycastBuffer(samples, profiles);
+        samples = this.appendRaycastBuffer(samples, profiles, get_raycast_indices(), base, indices);
       }
     }
 
@@ -1211,13 +1221,20 @@ export class SplatMesh extends SplatGenerator {
         distance,
         point,
         object: this,
+        index: SplatMesh.raycastSplatIndices[raycast_surface_index(
+          SplatMesh.raycastBuffer.subarray(0, samples), distance,
+        )],
       });
     }
   }
 
   static raycastBuffer = new Float32Array(1024);
+  static raycastSplatIndices = new Uint32Array(342);
 
-  private appendRaycastBuffer(count: number, additional: Float32Array) {
+  private appendRaycastBuffer(
+    count: number, additional: Float32Array, sourceIndices: Uint32Array,
+    base: number, indices: Uint32Array | null,
+  ) {
     const total = count + additional.length;
     let capacity = SplatMesh.raycastBuffer.length;
 
@@ -1228,8 +1245,15 @@ export class SplatMesh extends SplatGenerator {
       const newBuffer = new Float32Array(capacity);
       newBuffer.set(SplatMesh.raycastBuffer.subarray(0, count));
       SplatMesh.raycastBuffer = newBuffer;
+      const newIndices = new Uint32Array(Math.ceil(capacity / 3));
+      newIndices.set(SplatMesh.raycastSplatIndices.subarray(0, count / 3));
+      SplatMesh.raycastSplatIndices = newIndices;
     }
 
+    for (let index = 0; index < sourceIndices.length; index++) {
+      const source = base + sourceIndices[index];
+      SplatMesh.raycastSplatIndices[count / 3 + index] = indices ? indices[source] : source;
+    }
     SplatMesh.raycastBuffer.set(additional, count);
     return count + additional.length;
   }

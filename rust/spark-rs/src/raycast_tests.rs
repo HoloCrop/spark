@@ -79,7 +79,7 @@ fn faint_edge_layers_jointly_reach_the_surface_threshold() {
     encode_ext_splat(&mut splat, &mut scales, [0.0, 0.0, 5.0], 0.1, [1.0; 3], [1.0, 1.0, 0.1], IDENTITY);
     let mut profiles = Vec::new();
     raycast_ext_ellipsoids(
-        &splat.repeat(250), &scales.repeat(250), &mut profiles,
+        &splat.repeat(250), &scales.repeat(250), &mut profiles, &mut Vec::new(),
         [1.6, 0.0, 0.0], [0.0, 0.0, 1.0], 0.0, None,
     );
     let depth = crate::sample_surface_depth(&profiles, 0.0, 10.0).unwrap();
@@ -136,16 +136,16 @@ fn camera_clipped_sources_do_not_occlude_visible_surfaces() {
     }
     let mut profiles = Vec::new();
     raycast_ext_ellipsoids(
-        &splats, &scales, &mut profiles, [0.0; 3], [0.0, 0.0, 1.0], 0.0, Some(&projection),
+        &splats, &scales, &mut profiles, &mut Vec::new(), [0.0; 3], [0.0, 0.0, 1.0], 0.0, Some(&projection),
     );
     let depth = crate::sample_surface_depth(&profiles, 0.01, 100.0).unwrap();
     assert!((depth - 4.850357).abs() < 3e-5);
     profiles.clear();
     raycast_ext_ellipsoids(
-        &splats[..4], &scales[..4], &mut profiles, [0.0; 3], [0.0, 0.0, 1.0], 0.0, Some(&projection),
+        &splats[..4], &scales[..4], &mut profiles, &mut Vec::new(), [0.0; 3], [0.0, 0.0, 1.0], 0.0, Some(&projection),
     );
     raycast_ext_ellipsoids(
-        &splats[8..], &scales[8..], &mut profiles, [0.0; 3], [0.0, 0.0, 1.0], 0.0, Some(&projection),
+        &splats[8..], &scales[8..], &mut profiles, &mut Vec::new(), [0.0; 3], [0.0, 0.0, 1.0], 0.0, Some(&projection),
     );
     assert_eq!(crate::sample_surface_depth(&profiles, 0.01, 100.0), None);
 }
@@ -167,13 +167,13 @@ fn real_rad_camera_clipped_sources_cannot_create_viewer_ghost_points() {
         let mut profiles = Vec::new();
         for offset in [0.0, -0.8] {
             let direction = DVec3::new(-1.0, offset / 3.0_f64.sqrt(), 0.0).normalize().as_vec3().to_array();
-            raycast_ext_ellipsoids(&source, &geometry, &mut profiles, camera, direction, 0.0, Some(&projection));
+            raycast_ext_ellipsoids(&source, &geometry, &mut profiles, &mut Vec::new(), camera, direction, 0.0, Some(&projection));
         }
         assert_eq!(crate::sample_surface_depth(&profiles, 0.01, 100.0), None);
         let mut visible = [0; 4];
         let mut shape = [0; 4];
         encode_ext_splat(&mut visible, &mut shape, [69.0, 45.0, 1.5], 0.8, [1.0; 3], [0.25, 1.0, 1.0], IDENTITY);
-        raycast_ext_ellipsoids(&visible, &shape, &mut profiles, camera, [-1.0, 0.0, 0.0], 0.0, Some(&projection));
+        raycast_ext_ellipsoids(&visible, &shape, &mut profiles, &mut Vec::new(), camera, [-1.0, 0.0, 0.0], 0.0, Some(&projection));
         let depth = crate::sample_surface_depth(&profiles, 0.01, 100.0).unwrap();
         assert!((depth - 4.850357).abs() < 3e-5);
     }
@@ -189,13 +189,13 @@ fn collectors_keep_profiles_before_origin_and_return_depth_alpha_sigma_triples()
     encode_ext_splat(&mut extended, &mut extended_scale, [0.0, 0.0, 5.0], 1.0, [1.0; 3], [1.0; 3], IDENTITY);
     for (origin, expected_depth) in [([0.0, 0.0, 4.5], 0.5), ([0.0, 0.0, 5.5], -0.5)] {
         let mut profiles = Vec::new();
-        raycast_packed_ellipsoids(&packed, &mut profiles, origin, [0.0, 0.0, 1.0], 0.0, &encoding, None);
+        raycast_packed_ellipsoids(&packed, &mut profiles, &mut Vec::new(), origin, [0.0, 0.0, 1.0], 0.0, &encoding, None);
         assert_eq!(profiles.len(), 3);
         assert_eq!(profiles[0], expected_depth);
         assert_eq!(profiles[1], 0.99);
         assert!((profiles[2] - 1.0).abs() < 0.05);
         profiles.clear();
-        raycast_ext_ellipsoids(&extended, &extended_scale, &mut profiles, origin, [0.0, 0.0, 1.0], 0.0, None);
+        raycast_ext_ellipsoids(&extended, &extended_scale, &mut profiles, &mut Vec::new(), origin, [0.0, 0.0, 1.0], 0.0, None);
         assert_eq!(profiles, vec![expected_depth, 0.99, 1.0]);
     }
 }
@@ -212,7 +212,7 @@ fn profiles_wholly_behind_origin_do_not_hide_foreground_surface() {
         );
     }
     let mut profiles = Vec::new();
-    raycast_ext_ellipsoids(&extended, &extended_scale, &mut profiles, [0.0; 3], [0.0, 0.0, 1.0], 0.0, None);
+    raycast_ext_ellipsoids(&extended, &extended_scale, &mut profiles, &mut Vec::new(), [0.0; 3], [0.0, 0.0, 1.0], 0.0, None);
     assert_eq!(profiles.len(), 3);
     assert_eq!(profiles[0], 10.0);
     let depth = crate::sample_surface_depth(&profiles, 0.0, 20.0).unwrap();
@@ -228,9 +228,9 @@ fn hidden_zero_alpha_never_hits_with_zero_threshold() {
     encode_packed_splat(&mut packed, [0.0, 0.0, 5.0], 0.0, [1.0; 3], [1.0; 3], IDENTITY, &encoding);
     encode_ext_splat(&mut extended, &mut extended_scale, [0.0, 0.0, 5.0], 0.0, [1.0; 3], [1.0; 3], IDENTITY);
     let mut distances = Vec::new();
-    raycast_packed_ellipsoids(&packed, &mut distances, [0.0; 3], [0.0, 0.0, 1.0], 0.0, &encoding, None);
+    raycast_packed_ellipsoids(&packed, &mut distances, &mut Vec::new(), [0.0; 3], [0.0, 0.0, 1.0], 0.0, &encoding, None);
     assert!(distances.is_empty());
-    raycast_ext_ellipsoids(&extended, &extended_scale, &mut distances, [0.0; 3], [0.0, 0.0, 1.0], 0.0, None);
+    raycast_ext_ellipsoids(&extended, &extended_scale, &mut distances, &mut Vec::new(), [0.0; 3], [0.0, 0.0, 1.0], 0.0, None);
     assert!(distances.is_empty());
 }
 
@@ -246,4 +246,32 @@ fn crossing_plane_has_zero_depth_width_but_in_plane_ray_keeps_width() {
     ).unwrap();
     assert_eq!(tangent.depth, 20.0);
     assert_eq!(tangent.sigma, 2.0);
+}
+
+#[test]
+fn collector_indices_preserve_source_identity_after_skipping_hidden_and_missed_splats() {
+    let encoding = SplatEncoding::default();
+    let mut packed = [0; 16];
+    let mut extended = [0; 16];
+    let mut geometry = [0; 16];
+    for (index, (center, opacity)) in [
+        ([0.0, 0.0, 5.0], 0.0),
+        ([10.0, 0.0, 5.0], 0.8),
+        ([0.0, 0.0, 5.0], 0.8),
+        ([0.0, 0.0, 6.0], 0.8),
+    ].into_iter().enumerate() {
+        let range = index * 4..index * 4 + 4;
+        encode_packed_splat(&mut packed[range.clone()], center, opacity, [1.0; 3], [0.1; 3], IDENTITY, &encoding);
+        encode_ext_splat(&mut extended[range.clone()], &mut geometry[range], center, opacity, [1.0; 3], [0.1; 3], IDENTITY);
+    }
+    let mut profiles = Vec::new();
+    let mut indices = Vec::new();
+    raycast_packed_ellipsoids(&packed, &mut profiles, &mut indices, [0.0; 3], [0.0, 0.0, 1.0], 0.0, &encoding, None);
+    assert_eq!(indices, [2, 3]);
+    assert_eq!(profiles.len(), 6);
+    profiles.clear();
+    indices.clear();
+    raycast_ext_ellipsoids(&extended, &geometry, &mut profiles, &mut indices, [0.0; 3], [0.0, 0.0, 1.0], 0.0, None);
+    assert_eq!(indices, [2, 3]);
+    assert_eq!(profiles.len(), 6);
 }

@@ -15,6 +15,22 @@ enum DepthSide {
     Back,
 }
 
+/// Attribute the combined surface to the profile with the strongest opacity there.
+/// This only identifies the hit; it does not perform another intersection or move it.
+pub fn surface_contributor(profiles: &[RayProfile], depth: f32) -> usize {
+    profiles.iter().enumerate().max_by(|(_, left), (_, right)| {
+        let contribution = |profile: &RayProfile| {
+            if profile.sigma == 0.0 {
+                if profile.depth == depth { profile.alpha } else { 0.0 }
+            } else {
+                let offset = (depth - profile.depth) / profile.sigma;
+                profile.alpha * (-0.5 * offset.powi(4)).exp()
+            }
+        };
+        contribution(left).total_cmp(&contribution(right))
+    }).unwrap().0
+}
+
 fn log_transmittance(profiles: &[RayProfile], depth: f64, side: DepthSide) -> f64 {
     profiles.iter().map(|profile| {
         let alpha = f64::from(profile.alpha);
