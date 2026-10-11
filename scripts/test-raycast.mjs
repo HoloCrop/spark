@@ -12,7 +12,7 @@ await build({
     target: "esnext",
     minify: false,
     outDir,
-    lib: { entry: "test/raycast.test.ts", formats: ["es"], fileName: () => "raycast.mjs" },
+    lib: { entry: process.argv[2] ?? "test/raycast.test.ts", formats: ["es"], fileName: () => "raycast.mjs" },
     rollupOptions: { external: ["three", "node:assert/strict", "node:test"] },
   },
 });

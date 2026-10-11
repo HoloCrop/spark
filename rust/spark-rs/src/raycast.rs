@@ -14,6 +14,29 @@ pub struct RaycastProjection {
 }
 
 impl RaycastProjection {
+    fn intersects_bounds(&self, origin: [f32; 3], dir: [f32; 3], center: [f32; 3], scale: [f32; 3]) -> bool {
+        let center = -(self.camera_from_mesh * DVec3::from_array(vec3_sub(origin, center).map(f64::from)));
+        if center.z <= self.near || center.z >= self.far {
+            return false;
+        }
+        let direction = self.camera_from_mesh * DVec3::from_array(dir.map(f64::from));
+        let inverse_depth = center.z.recip();
+        let dx = center.x * inverse_depth - direction.x / direction.z;
+        let dy = center.y * inverse_depth - direction.y / direction.z;
+        // Bound the projected covariance before decoding rotation: rotation preserves
+        // length, and diag(scale) can stretch a Jacobian row by at most max(scale).
+        // All opacity-dependent supports have squared radius <= sqrt(8) + 0.7*4 < 6.
+        // The slack also covers float rounding at the narrow-phase support boundary.
+        let radius_squared = 6.0 * f64::from(scale.into_iter().fold(0.0_f32, f32::max)).powi(2);
+        let camera_transpose = self.camera_from_mesh.transpose();
+        let horizontal = camera_transpose * DVec3::new(inverse_depth, 0.0, -center.x * inverse_depth * inverse_depth);
+        if dx * dx > radius_squared * horizontal.length_squared() {
+            return false;
+        }
+        let vertical = camera_transpose * DVec3::new(0.0, inverse_depth, -center.y * inverse_depth * inverse_depth);
+        dy * dy <= radius_squared * vertical.length_squared()
+    }
+
     fn sample(&self, origin: [f32; 3], dir: [f32; 3], scale: [f32; 3], quat: [f32; 4]) -> Option<(f32, f32, f32)> {
         let origin = DVec3::from_array(origin.map(f64::from));
         let dir = self.camera_from_mesh * DVec3::from_array(dir.map(f64::from));
@@ -68,6 +91,9 @@ pub fn raycast_packed_ellipsoids(
         }
         let center = decode_packed_splat_center(packed);
         let scale = decode_packed_splat_scale(packed, encoding);
+        if projection.is_some_and(|projection| !projection.intersects_bounds(origin, dir, center, scale)) {
+            continue;
+        }
         let quat = decode_packed_splat_quat(packed);
         if let Some(profile) = raycast_gaussian(origin, dir, opacity, center, scale, quat, min_opacity, projection) {
             profiles.extend_from_slice(&[profile.depth, profile.alpha, profile.sigma]);
@@ -88,6 +114,9 @@ pub fn raycast_ext_ellipsoids(
         }
         let center = decode_ext_splat_center(ext_a);
         let scale = decode_ext_splat_scale(ext_b);
+        if projection.is_some_and(|projection| !projection.intersects_bounds(origin, dir, center, scale)) {
+            continue;
+        }
         let quat = decode_ext_splat_quat(ext_b);
         if let Some(profile) = raycast_gaussian(origin, dir, opacity, center, scale, quat, min_opacity, projection) {
             profiles.extend_from_slice(&[profile.depth, profile.alpha, profile.sigma]);
@@ -189,3 +218,7 @@ fn quat_vec(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
 #[cfg(test)]
 #[path = "raycast_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "raycast_bounds_tests.rs"]
+mod bounds_tests;
