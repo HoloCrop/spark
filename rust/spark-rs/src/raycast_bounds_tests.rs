@@ -1,4 +1,5 @@
 use super::*;
+use crate::raycast_blocks::RaycastBlockIndex;
 use spark_lib::splat_encode::{encode_ext_splat, encode_packed_splat};
 
 #[test]
@@ -25,6 +26,11 @@ fn bounds_preserve_all_profiles_and_ids_from_the_unfiltered_narrow_phase() {
             encode_packed_splat(&mut packed[index*4..index*4+4], center, opacity, [1.0;3], scale, quat, &encoding);
             encode_ext_splat(&mut extended[index*4..index*4+4], &mut geometry[index*4..index*4+4], center, opacity, [1.0;3], scale, quat);
         }
+        let mut packed_index = RaycastBlockIndex::new(128);
+        let mut ext_index = RaycastBlockIndex::new(128);
+        packed_index.update_packed(0, &packed, encoding.ln_scale_min, encoding.ln_scale_max);
+        ext_index.update_ext(0, &extended, &geometry);
+        let displayed: Vec<u32> = (0..128).collect();
         for x in -15..=15 {
             for y in -10..=10 {
                 let direction = (matrix.inverse() * DVec3::new(x as f64 * 0.025, y as f64 * 0.025, 1.0)).normalize().as_vec3().to_array();
@@ -53,6 +59,9 @@ fn bounds_preserve_all_profiles_and_ids_from_the_unfiltered_narrow_phase() {
                     }
                     assert_eq!(actual, expected);
                     assert_eq!(indices, expected_indices);
+                    let candidates = if ext { &mut ext_index } else { &mut packed_index }
+                        .candidates(&displayed, &projection, origin, direction);
+                    assert!(expected_indices.iter().all(|index| candidates.contains(index)));
                     hits += indices.len();
                 }
             }

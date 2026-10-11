@@ -1,6 +1,7 @@
 import { dyno } from '.';
 import { SplatSource } from './SplatMesh';
 import { ExtResult, PackedResult, RadMeta, SplatEncoding, SplatFileType } from './defines';
+import { SplatRaycastBlocks } from './SplatRaycastBlocks';
 import * as THREE from "three";
 export interface PagedSplatsOptions {
     pager?: SplatPager;
@@ -96,6 +97,7 @@ interface PageUpload {
     instances?: Uint32Array;
 }
 export declare class SplatPager {
+    readonly raycastBlocks: SplatRaycastBlocks;
     readonly renderer: THREE.WebGLRenderer;
     readonly extSplats: boolean;
     readonly maxPages: number;

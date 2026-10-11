@@ -1062,15 +1062,11 @@ export class SplatMesh extends SplatGenerator {
       far = Math.min(far, raycaster.camera.far / forward);
     }
 
-    const buffer = get_raycast_buffer();
-    const bufferSize = buffer.length / 4;
-    let samples = 0;
-
-    const numSplats =
+    let numSplats =
       this.raycastIndices?.numSplats ??
       (paged ? this.paged?.numSplats : this.context.numSplats.value) ??
       0;
-    const indices =
+    let indices =
       this.raycastIndices?.indices ??
       (paged
         ? (this.paged?.dynoIndices.value.image.data as Uint32Array)
@@ -1078,6 +1074,17 @@ export class SplatMesh extends SplatGenerator {
           ? (this.context.lodIndices.value.image.data as Uint32Array)
           : null) ??
       null;
+    if (this.paged?.pager && projection && !this.raycastIndices) {
+      indices = this.paged.pager.raycastBlocks.query(
+        this.paged.pager, indices!.subarray(0, numSplats), projection,
+        origin.toArray(), direction.toArray(),
+      );
+      numSplats = indices.length;
+    }
+    // Querying the index may grow Wasm memory: acquire its scratch views afterwards.
+    const buffer = get_raycast_buffer();
+    const bufferSize = buffer.length / 4;
+    let samples = 0;
     const labels = this.paged?.pager?.labelTexture.value.image.data as
       | Uint32Array
       | undefined;

@@ -1,6 +1,6 @@
 // Synthetic overlapping layers: measure picker cost, not browser frame rate.
 import * as THREE from 'three';
-import { ExtSplats, SplatMesh } from '../src/index';
+import { ExtSplats, SplatMesh, SplatPager, PagedSplats, SplatFileType } from '../src/index';
 import { initialization } from '../src/wasm';
 await initialization;
 const count = 1250000;
@@ -13,8 +13,26 @@ for (let index = 0; index < count; index++) {
   center.set((index % 1000 - 500) * 0.006, (Math.floor(index / 1000) % 625 - 312) * 0.006, -5 - Math.floor(index / 625000));
   splats.pushSplat(center, scale, rotation, 0.8, color);
 }
-const mesh = new SplatMesh({extSplats:splats});
-mesh.context.numSplats.value = count;
+// Headless renderer: this benchmark measures CPU picking, not GPU upload or rendering.
+const renderer = {initTexture() {}} as THREE.WebGLRenderer;
+const pager = new SplatPager({renderer, maxSplats: count, extSplats: true, autoDrive: false});
+const paged = new PagedSplats({pager, fileType: SplatFileType.PLY});
+const uploads = [];
+for (let start = 0; start < count; start += pager.pageSplats) {
+  const page = start / pager.pageSplats;
+  pager.pageToSplatsChunk[page] = {splats: paged, chunk: page, time: 0};
+  pager.readyUploads.push({page, numSplats: Math.min(pager.pageSplats,count-start),
+    packedArray: splats.extArrays[0].subarray(start*4,(start+pager.pageSplats)*4),
+    extArray: splats.extArrays[1].subarray(start*4,(start+pager.pageSplats)*4),
+    labels: new Uint32Array(pager.pageSplats).fill(1), shArrays: []});
+  const startUpload = performance.now();
+  pager.processUploads();
+  uploads.push(performance.now()-startUpload);
+}
+const displayed = new Uint32Array(Math.ceil(count/16384)*16384);
+for (let index=0;index<count;index++) displayed[index]=index;
+paged.update(count,displayed);
+const mesh = new SplatMesh({paged});
 const camera = new THREE.PerspectiveCamera(60, 1.5, 0.01, 100);
 const ray = new THREE.Raycaster();
 const results = [];
@@ -24,5 +42,7 @@ for (let index = 0; index < 12; index++) {
   const [hit] = ray.intersectObject(mesh);
   results.push({ms:performance.now()-start, index:hit?.index, distance:hit?.distance});
 }
-console.log(JSON.stringify({count, results}));
+console.log(JSON.stringify({count, uploads, results}));
 mesh.dispose();
+pager.dispose();
+splats.dispose();

@@ -11,6 +11,7 @@ use crate::ext_splats::ExtSplatsData;
 use crate::{decoder::ChunkDecoder, packed_splats::PackedSplatsData};
 
 mod raycast;
+mod raycast_blocks;
 use raycast::{RaycastProjection, raycast_packed_ellipsoids, raycast_ext_ellipsoids};
 mod surface_depth;
 
