@@ -57,11 +57,11 @@ impl RaycastProjection {
 }
 
 pub fn raycast_packed_ellipsoids(
-    buffer: &[u32], profiles: &mut Vec<f32>,
+    buffer: &[u32], profiles: &mut Vec<f32>, indices: &mut Vec<u32>,
     origin: [f32; 3], dir: [f32; 3], min_opacity: f32,
     encoding: &SplatEncoding, projection: Option<&RaycastProjection>,
 ) {
-    for packed in buffer.chunks(4) {
+    for (index, packed) in buffer.chunks(4).enumerate() {
         let opacity = decode_packed_splat_opacity(packed, encoding);
         if opacity == 0.0 {
             continue;
@@ -71,16 +71,17 @@ pub fn raycast_packed_ellipsoids(
         let quat = decode_packed_splat_quat(packed);
         if let Some(profile) = raycast_gaussian(origin, dir, opacity, center, scale, quat, min_opacity, projection) {
             profiles.extend_from_slice(&[profile.depth, profile.alpha, profile.sigma]);
+            indices.push(index as u32);
         }
     }
 }
 
 pub fn raycast_ext_ellipsoids(
-    buffer: &[u32], buffer2: &[u32], profiles: &mut Vec<f32>,
+    buffer: &[u32], buffer2: &[u32], profiles: &mut Vec<f32>, indices: &mut Vec<u32>,
     origin: [f32; 3], dir: [f32; 3], min_opacity: f32, projection: Option<&RaycastProjection>,
 ) {
     assert_eq!(buffer.len(), buffer2.len());
-    for (ext_a, ext_b) in buffer.chunks(4).zip(buffer2.chunks(4)) {
+    for (index, (ext_a, ext_b)) in buffer.chunks(4).zip(buffer2.chunks(4)).enumerate() {
         let opacity = decode_ext_splat_opacity(ext_a);
         if opacity == 0.0 {
             continue;
@@ -90,6 +91,7 @@ pub fn raycast_ext_ellipsoids(
         let quat = decode_ext_splat_quat(ext_b);
         if let Some(profile) = raycast_gaussian(origin, dir, opacity, center, scale, quat, min_opacity, projection) {
             profiles.extend_from_slice(&[profile.depth, profile.alpha, profile.sigma]);
+            indices.push(index as u32);
         }
     }
 }
