@@ -3,6 +3,8 @@ import { test } from "node:test";
 import * as THREE from "three";
 import { ExtSplats, PackedSplats, SplatMesh, SplatPager, PagedSplats, SplatFileType } from "../src/index";
 import { initialization } from "../src/wasm";
+import { preparePagedExtResult, preparePagedPackedResult } from "../src/PagedSplatDecode";
+import { DEFAULT_SPLAT_ENCODING } from "../src/defines";
 
 await initialization;
 
@@ -59,10 +61,17 @@ for (const ext of [false, true]) {
     for (let index = 0; index < 128; index++) {
       splats.setSplat(index, new THREE.Vector3(0,0,index < 64 ? -3 : -5), scale, rotation, 0.9, color);
     }
-    const upload = () => {
-      pager.readyUploads.push({page: 0, numSplats: 128,
+    const upload = (numSplats = 128) => {
+      // The decode worker prepares bounds before transferring the page to the pager.
+      const extra = { lodTree: new Uint32Array() };
+      const decoded = splats instanceof ExtSplats
+        ? preparePagedExtResult({numSplats, extArrays: splats.extArrays, extra})
+        : preparePagedPackedResult({numSplats, packedArray: splats.packedArray, splatEncoding: splats.splatEncoding ?? DEFAULT_SPLAT_ENCODING, extra});
+      const raycastBounds = structuredClone(decoded.raycastBounds, {transfer: [decoded.raycastBounds.buffer]});
+      pager.readyUploads.push({page: 0, numSplats,
         packedArray: splats instanceof ExtSplats ? splats.extArrays[0] : splats.packedArray,
         extArray: splats instanceof ExtSplats ? splats.extArrays[1] : undefined,
+        raycastBounds,
         shArrays: [], labels: new Uint32Array(128).fill(1), instances: new Uint32Array(128).fill(1)});
       pager.processUploads();
     };
@@ -92,6 +101,12 @@ for (const ext of [false, true]) {
     assert.equal(ray.intersectObject(mesh)[0].index, 64);
     paged.numSplats = 1;
     displayed[0] = 0;
+    assert.deepEqual(ray.intersectObject(mesh), []);
+
+    // A shorter replacement must not inherit the previous page's second block,
+    // even while old texture bytes are still allocated beyond the new page count.
+    upload(32);
+    displayed[0] = 64;
     assert.deepEqual(ray.intersectObject(mesh), []);
     mesh.dispose();
     pager.dispose();

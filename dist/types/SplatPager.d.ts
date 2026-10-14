@@ -1,7 +1,8 @@
 import { dyno } from '.';
 import { SplatSource } from './SplatMesh';
-import { ExtResult, PackedResult, RadMeta, SplatEncoding, SplatFileType } from './defines';
+import { RadMeta, SplatEncoding, SplatFileType } from './defines';
 import { SplatRaycastBlocks } from './SplatRaycastBlocks';
+import { PagedExtResult, PagedPackedResult } from './PagedSplatResult';
 import * as THREE from "three";
 export interface PagedSplatsOptions {
     pager?: SplatPager;
@@ -44,7 +45,7 @@ export declare class PagedSplats implements SplatSource {
         chunksStart: number;
     }>;
     chunkUrl(chunk: number): string;
-    fetchDecodeChunk(chunk: number): Promise<PackedResult | ExtResult>;
+    fetchDecodeChunk(chunk: number): Promise<PagedPackedResult | PagedExtResult>;
     update(numSplats: number, indices: Uint32Array): void;
     prepareFetchSplat(): void;
     getNumSplats(): number;
@@ -91,6 +92,7 @@ interface PageUpload {
     page: number;
     numSplats: number;
     packedArray: Uint32Array;
+    raycastBounds: Float32Array;
     extArray?: Uint32Array;
     shArrays: Array<Uint32Array>;
     labels?: Uint32Array;
@@ -140,7 +142,7 @@ export declare class SplatPager {
     fetched: {
         splats: PagedSplats;
         chunk: number;
-        data: PackedResult | ExtResult;
+        data: PagedPackedResult | PagedExtResult;
     }[];
     fetchPriority: {
         splats: PagedSplats;

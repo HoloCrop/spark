@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { ExtSplats, SplatMesh, SplatPager, PagedSplats, SplatFileType } from '../src/index';
 import { initialization } from '../src/wasm';
+import { preparePagedExtResult } from '../src/PagedSplatDecode';
 await initialization;
 const count = 1250000;
 const splats = new ExtSplats({maxSplats: count});
@@ -18,12 +19,19 @@ const renderer = {initTexture() {}} as THREE.WebGLRenderer;
 const pager = new SplatPager({renderer, maxSplats: count, extSplats: true, autoDrive: false});
 const paged = new PagedSplats({pager, fileType: SplatFileType.PLY});
 const uploads = [];
+const boundsBuilds = [];
 for (let start = 0; start < count; start += pager.pageSplats) {
   const page = start / pager.pageSplats;
   pager.pageToSplatsChunk[page] = {splats: paged, chunk: page, time: 0};
-  pager.readyUploads.push({page, numSplats: Math.min(pager.pageSplats,count-start),
-    packedArray: splats.extArrays[0].subarray(start*4,(start+pager.pageSplats)*4),
-    extArray: splats.extArrays[1].subarray(start*4,(start+pager.pageSplats)*4),
+  const startBounds = performance.now();
+  const decoded = preparePagedExtResult({numSplats: Math.min(pager.pageSplats,count-start),
+    extArrays: [splats.extArrays[0].subarray(start*4,(start+pager.pageSplats)*4),
+      splats.extArrays[1].subarray(start*4,(start+pager.pageSplats)*4)],
+    extra: {lodTree: new Uint32Array()}});
+  boundsBuilds.push(performance.now()-startBounds);
+  pager.readyUploads.push({page, numSplats: decoded.numSplats,
+    packedArray: decoded.extArrays[0], extArray: decoded.extArrays[1],
+    raycastBounds: decoded.raycastBounds,
     labels: new Uint32Array(pager.pageSplats).fill(1), shArrays: []});
   const startUpload = performance.now();
   pager.processUploads();
@@ -42,7 +50,7 @@ for (let index = 0; index < 12; index++) {
   const [hit] = ray.intersectObject(mesh);
   results.push({ms:performance.now()-start, index:hit?.index, distance:hit?.distance});
 }
-console.log(JSON.stringify({count, uploads, results}));
+console.log(JSON.stringify({count, boundsBuilds, uploads, results}));
 mesh.dispose();
 pager.dispose();
 splats.dispose();
