@@ -13654,6 +13654,139 @@ const QUAD_VERTICES = new Float32Array([
   0
 ]);
 const QUAD_INDICES = new Uint16Array([0, 1, 2, 0, 2, 3]);
+class ReadbackCancelledError extends Error {
+  constructor() {
+    super("Depth readback cancelled");
+  }
+}
+class ReadbackTasks {
+  constructor() {
+    this.channel = new MessageChannel();
+    this.nextId = 0;
+    this.channel.port1.onmessage = ({ data }) => {
+      const pending = this.pending;
+      if (pending && pending.id === data) pending.resume();
+    };
+  }
+  now() {
+    return performance.now();
+  }
+  waitForGPU(signal) {
+    return this.wait(signal, true);
+  }
+  yieldToMain(signal) {
+    return this.wait(signal, false);
+  }
+  wait(signal, poll) {
+    return new Promise((resolve, reject) => {
+      let timer;
+      const finish = () => {
+        signal.removeEventListener("abort", cancel);
+        this.pending = void 0;
+        resolve();
+      };
+      const cancel = () => {
+        clearTimeout(timer);
+        this.pending = void 0;
+        reject(new ReadbackCancelledError());
+      };
+      signal.addEventListener("abort", cancel, { once: true });
+      if (signal.aborted) cancel();
+      else if (poll) timer = setTimeout(finish, 4);
+      else {
+        const id = ++this.nextId;
+        this.pending = { id, resume: finish };
+        this.channel.port2.postMessage(id);
+      }
+    });
+  }
+  dispose() {
+    this.channel.port1.close();
+    this.channel.port2.close();
+  }
+}
+class SplatDepthReadback {
+  constructor(gl, scheduler = new ReadbackTasks()) {
+    this.gl = gl;
+    this.scheduler = scheduler;
+    this.buffer = null;
+    this.capacity = 0;
+    this.disposed = false;
+    this.copyBytes = 1024 * 1024;
+    this.copyBudgetMs = 2;
+    this.contextLost = () => {
+      var _a2;
+      (_a2 = this.active) == null ? void 0 : _a2.abort();
+      this.releaseBuffer();
+    };
+    gl.canvas.addEventListener("webglcontextlost", this.contextLost);
+  }
+  releaseBuffer() {
+    if (this.buffer) this.gl.deleteBuffer(this.buffer);
+    this.buffer = null;
+    this.capacity = 0;
+  }
+  dispose() {
+    var _a2;
+    this.disposed = true;
+    (_a2 = this.active) == null ? void 0 : _a2.abort();
+    this.gl.canvas.removeEventListener("webglcontextlost", this.contextLost);
+    this.releaseBuffer();
+    this.scheduler.dispose();
+  }
+  async read(destination, snapshot) {
+    if (this.disposed || this.gl.isContextLost()) throw new ReadbackCancelledError();
+    if (this.active) throw new Error("Depth readback is already in progress");
+    const controller = new AbortController();
+    this.active = controller;
+    const { signal } = controller;
+    const gl = this.gl;
+    let fence = null;
+    try {
+      if (!this.buffer) this.buffer = gl.createBuffer();
+      const previous = gl.getParameter(gl.PIXEL_PACK_BUFFER_BINDING);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.buffer);
+      try {
+        if (destination.byteLength > this.capacity) {
+          this.capacity = Math.max(destination.byteLength, this.capacity * 2);
+          gl.bufferData(gl.PIXEL_PACK_BUFFER, this.capacity, gl.STREAM_READ);
+        }
+        snapshot();
+        fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+        gl.flush();
+      } finally {
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, previous);
+      }
+      while (true) {
+        await this.scheduler.waitForGPU(signal);
+        if (signal.aborted) throw new ReadbackCancelledError();
+        const status = gl.clientWaitSync(fence, 0, 0);
+        if (status === gl.WAIT_FAILED) throw new Error("Depth readback fence failed");
+        if (status !== gl.TIMEOUT_EXPIRED) break;
+      }
+      let turnStarted = this.scheduler.now();
+      for (let offset = 0; offset < destination.byteLength; ) {
+        const bytes = Math.min(this.copyBytes, destination.byteLength - offset);
+        const previous2 = gl.getParameter(gl.PIXEL_PACK_BUFFER_BINDING);
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.buffer);
+        try {
+          gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, offset, destination, offset, bytes);
+        } finally {
+          gl.bindBuffer(gl.PIXEL_PACK_BUFFER, previous2);
+        }
+        offset += bytes;
+        if (offset < destination.byteLength && this.scheduler.now() - turnStarted >= this.copyBudgetMs) {
+          await this.scheduler.yieldToMain(signal);
+          if (signal.aborted) throw new ReadbackCancelledError();
+          turnStarted = this.scheduler.now();
+        }
+      }
+    } finally {
+      if (fence) gl.deleteSync(fence);
+      this.active = void 0;
+    }
+  }
+}
 const _SparkRenderer = class _SparkRenderer extends THREE__namespace.Mesh {
   constructor(options) {
     if (!options) {
@@ -13695,6 +13828,7 @@ const _SparkRenderer = class _SparkRenderer extends THREE__namespace.Mesh {
     this.sortedCenter = new THREE__namespace.Vector3().setScalar(Number.NEGATIVE_INFINITY);
     this.sortedDir = new THREE__namespace.Vector3().setScalar(0);
     this.readback32 = new Uint32Array(0);
+    this.disposed = false;
     this.lastLodRaycastTime = 0;
     this.lodWorker = null;
     this.lodMeshes = [];
@@ -13871,6 +14005,11 @@ const _SparkRenderer = class _SparkRenderer extends THREE__namespace.Mesh {
     return uniforms;
   }
   dispose() {
+    var _a2;
+    this.disposed = true;
+    (_a2 = this.depthReadback) == null ? void 0 : _a2.dispose();
+    clearTimeout(this.sortTimeoutId);
+    clearTimeout(this.updateTimeoutId);
     if (this.target) {
       this.target.dispose();
       this.target = void 0;
@@ -14112,7 +14251,7 @@ const _SparkRenderer = class _SparkRenderer extends THREE__namespace.Mesh {
     await this.driveSort();
   }
   async driveSort() {
-    if (this.sorting || !this.sortDirty) {
+    if (this.disposed || this.sorting || !this.sortDirty) {
       return;
     }
     if (this.sortTimeoutId !== -1) {
@@ -14131,13 +14270,31 @@ const _SparkRenderer = class _SparkRenderer extends THREE__namespace.Mesh {
     this.sorting = true;
     this.sortDirty = false;
     this.lastSortTime = now;
+    try {
+      await this.sortCurrent();
+    } catch (error) {
+      if (error instanceof ReadbackCancelledError) {
+        this.sortDirty = true;
+        return;
+      }
+      if (!this.disposed) throw error;
+    } finally {
+      this.sorting = false;
+    }
+    if (!this.disposed) {
+      this.setDirty();
+      this.driveSort();
+    }
+  }
+  async sortCurrent() {
     if (this.readPause > 0) {
       await new Promise((resolve) => setTimeout(resolve, this.readPause));
     }
+    if (this.disposed) return;
     const current = this.current;
     this.sortedCenter.copy(current.viewOrigin);
     this.sortedDir.copy(current.viewDirection);
-    const { numSplats, maxSplats } = current;
+    const { numSplats, maxSplats, mappingVersion } = current;
     const rows = Math.max(1, Math.ceil(maxSplats / 16384));
     const orderingMaxSplats = rows * 16384;
     this.maxSplats = Math.max(this.maxSplats, orderingMaxSplats);
@@ -14153,6 +14310,7 @@ const _SparkRenderer = class _SparkRenderer extends THREE__namespace.Mesh {
     if (this.sortPause > 0) {
       await new Promise((resolve) => setTimeout(resolve, this.sortPause));
     }
+    if (this.disposed) return;
     if (!this.sortWorker) {
       this.sortWorker = new SplatWorker();
     }
@@ -14164,7 +14322,12 @@ const _SparkRenderer = class _SparkRenderer extends THREE__namespace.Mesh {
     if (this.sortDelay > 0) {
       await new Promise((resolve) => setTimeout(resolve, this.sortDelay));
     }
+    if (this.disposed) return;
     this.readback32 = result.readback;
+    if (this.current.mappingVersion !== mappingVersion) {
+      this.sortDirty = true;
+      return;
+    }
     this.activeSplats = result.activeSplats;
     if (this.orderingTexture) {
       if (rows > this.orderingTexture.image.height) {
@@ -14197,15 +14360,10 @@ const _SparkRenderer = class _SparkRenderer extends THREE__namespace.Mesh {
         );
       }
     }
-    if (this.current.mappingVersion === current.mappingVersion) {
-      if (this.current.mappingVersion !== this.display.mappingVersion) {
-        this.accumulators.push(this.display);
-        this.display = this.current;
-      }
+    if (this.current.mappingVersion !== this.display.mappingVersion) {
+      this.accumulators.push(this.display);
+      this.display = this.current;
     }
-    this.sorting = false;
-    this.setDirty();
-    this.driveSort();
   }
   ensureLodWorker() {
     if (!this.lodWorker) {
@@ -14612,43 +14770,31 @@ const _SparkRenderer = class _SparkRenderer extends THREE__namespace.Mesh {
         `Readback buffer too small: ${readback.byteLength} < ${roundedCount * 4}`
       );
     }
-    const readbackUint8 = new Uint8Array(readback.buffer);
+    const readbackUint8 = new Uint8Array(readback.buffer, 0, roundedCount * 4);
     const renderState = this.saveRenderState(renderer);
+    const activeLayer = renderer.getActiveCubeFace();
+    const mipLevel = renderer.getActiveMipmapLevel();
+    const gl = renderer.getContext();
+    const previousReadBuffer = gl.getParameter(gl.READ_BUFFER);
+    const target = current.target;
     const layerSize = SPLAT_TEX_WIDTH * SPLAT_TEX_HEIGHT;
-    let baseIndex = 0;
-    const promises = [];
-    while (baseIndex < numSplats) {
-      const layer = Math.floor(baseIndex / layerSize);
-      const layerBase = layer * layerSize;
-      const layerYEnd = Math.min(
-        SPLAT_TEX_HEIGHT,
-        Math.ceil((numSplats - layerBase) / SPLAT_TEX_WIDTH)
-      );
-      const readbackSize = SPLAT_TEX_WIDTH * layerYEnd * 4;
-      const subReadback = readbackUint8.subarray(
-        layerBase * 4,
-        layerBase * 4 + readbackSize
-      );
-      renderer.setRenderTarget(current.target, layer);
-      const promise = renderer.readRenderTargetPixelsAsync(
-        current.target,
-        0,
-        0,
-        SPLAT_TEX_WIDTH,
-        layerYEnd,
-        subReadback,
-        void 0,
-        current.extSplats ? 2 : 1
-      );
-      promises.push(promise);
-      if (this.flushAfterRead) {
-        const gl = renderer.getContext();
-        gl.flush();
+    this.depthReadback ?? (this.depthReadback = new SplatDepthReadback(gl));
+    await this.depthReadback.read(readbackUint8, () => {
+      try {
+        for (let base = 0; base < numSplats; base += layerSize) {
+          const rows = Math.min(SPLAT_TEX_HEIGHT, Math.ceil((numSplats - base) / SPLAT_TEX_WIDTH));
+          renderer.setRenderTarget(target, base / layerSize);
+          gl.readBuffer(gl.COLOR_ATTACHMENT0 + (current.extSplats ? 2 : 1));
+          gl.readPixels(0, 0, SPLAT_TEX_WIDTH, rows, gl.RGBA, gl.UNSIGNED_BYTE, base * 4);
+        }
+      } finally {
+        renderer.setRenderTarget(renderState.target, activeLayer, mipLevel);
+        renderer.xr.enabled = renderState.xrEnabled;
+        renderer.autoClear = renderState.autoClear;
+        gl.readBuffer(previousReadBuffer);
       }
-      baseIndex += SPLAT_TEX_WIDTH * layerYEnd;
-    }
-    this.resetRenderState(renderer, renderState);
-    return Promise.all(promises).then(() => readback);
+    });
+    return readback;
   }
   saveRenderState(renderer) {
     return {

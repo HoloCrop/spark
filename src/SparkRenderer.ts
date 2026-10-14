@@ -11,6 +11,7 @@ import {
 import { SplatAccumulator } from "./SplatAccumulator";
 import { SplatGeometry } from "./SplatGeometry";
 import { SplatWorker } from "./SplatWorker";
+import { ReadbackCancelledError, SplatDepthReadback } from "./SplatDepthReadback";
 import { SPLAT_TEX_HEIGHT, SPLAT_TEX_WIDTH } from "./defines";
 import { getShaders } from "./shaders";
 import {
@@ -384,6 +385,8 @@ export class SparkRenderer extends THREE.Mesh {
   sortedCenter = new THREE.Vector3().setScalar(Number.NEGATIVE_INFINITY);
   sortedDir = new THREE.Vector3().setScalar(0);
   readback32 = new Uint32Array(0);
+  private depthReadback?: SplatDepthReadback;
+  private disposed = false;
 
   enableLod: boolean;
   enableDriveLod: boolean;
@@ -464,6 +467,7 @@ export class SparkRenderer extends THREE.Mesh {
   superXY = 1;
 
   flushAfterGenerate = false;
+  /** @deprecated Depth snapshots always flush their completion fence. */
   flushAfterRead = false;
   readPause = 1;
   sortPause = 0;
@@ -684,6 +688,10 @@ export class SparkRenderer extends THREE.Mesh {
   }
 
   dispose() {
+    this.disposed = true;
+    this.depthReadback?.dispose();
+    clearTimeout(this.sortTimeoutId);
+    clearTimeout(this.updateTimeoutId);
     if (this.target) {
       this.target.dispose();
       this.target = undefined;
@@ -1001,7 +1009,7 @@ export class SparkRenderer extends THREE.Mesh {
   }
 
   private async driveSort() {
-    if (this.sorting || !this.sortDirty) {
+    if (this.disposed || this.sorting || !this.sortDirty) {
       return;
     }
 
@@ -1026,16 +1034,36 @@ export class SparkRenderer extends THREE.Mesh {
     this.sortDirty = false;
     this.lastSortTime = now;
 
+    try {
+      await this.sortCurrent();
+    } catch (error) {
+      if (error instanceof ReadbackCancelledError) {
+        this.sortDirty = true;
+        return;
+      }
+      if (!this.disposed) throw error;
+    } finally {
+      this.sorting = false;
+    }
+    if (!this.disposed) {
+      this.setDirty();
+      this.driveSort();
+    }
+  }
+
+  private async sortCurrent() {
     if (this.readPause > 0) {
       await new Promise((resolve) => setTimeout(resolve, this.readPause));
     }
+    if (this.disposed) return;
 
     const current = this.current;
 
     this.sortedCenter.copy(current.viewOrigin);
     this.sortedDir.copy(current.viewDirection);
 
-    const { numSplats, maxSplats } = current;
+    // Accumulator objects are recycled while this asynchronous job is in flight.
+    const { numSplats, maxSplats, mappingVersion } = current;
     const rows = Math.max(1, Math.ceil(maxSplats / 16384));
     const orderingMaxSplats = rows * 16384;
     this.maxSplats = Math.max(this.maxSplats, orderingMaxSplats);
@@ -1054,6 +1082,7 @@ export class SparkRenderer extends THREE.Mesh {
     if (this.sortPause > 0) {
       await new Promise((resolve) => setTimeout(resolve, this.sortPause));
     }
+    if (this.disposed) return;
 
     if (!this.sortWorker) {
       this.sortWorker = new SplatWorker();
@@ -1071,8 +1100,14 @@ export class SparkRenderer extends THREE.Mesh {
     if (this.sortDelay > 0) {
       await new Promise((resolve) => setTimeout(resolve, this.sortDelay));
     }
+    if (this.disposed) return;
 
     this.readback32 = result.readback;
+
+    if (this.current.mappingVersion !== mappingVersion) {
+      this.sortDirty = true;
+      return;
+    }
 
     this.activeSplats = result.activeSplats;
 
@@ -1110,18 +1145,10 @@ export class SparkRenderer extends THREE.Mesh {
       }
     }
 
-    // console.log(`Sorted (${this.minSortIntervalMs}) ${numSplats} splats in ${(performance.now() - now).toFixed(0)} ms`);
-
-    if (this.current.mappingVersion === current.mappingVersion) {
-      if (this.current.mappingVersion !== this.display.mappingVersion) {
-        this.accumulators.push(this.display);
-        this.display = this.current;
-      }
+    if (this.current.mappingVersion !== this.display.mappingVersion) {
+      this.accumulators.push(this.display);
+      this.display = this.current;
     }
-    this.sorting = false;
-    this.setDirty();
-
-    this.driveSort();
   }
 
   private ensureLodWorker() {
@@ -1695,54 +1722,31 @@ export class SparkRenderer extends THREE.Mesh {
         `Readback buffer too small: ${readback.byteLength} < ${roundedCount * 4}`,
       );
     }
-    const readbackUint8 = new Uint8Array(readback.buffer);
+    const readbackUint8 = new Uint8Array(readback.buffer, 0, roundedCount * 4);
     const renderState = this.saveRenderState(renderer);
-
-    // We can only read back one 2D array layer of pixels at a time,
-    // so loop through them, initiate the readback, and collect the
-    // completion promises.
+    const activeLayer = renderer.getActiveCubeFace();
+    const mipLevel = renderer.getActiveMipmapLevel();
+    const gl = renderer.getContext() as WebGL2RenderingContext;
+    const previousReadBuffer = gl.getParameter(gl.READ_BUFFER) as number;
+    const target = current.target;
     const layerSize = SPLAT_TEX_WIDTH * SPLAT_TEX_HEIGHT;
-    let baseIndex = 0;
-    const promises = [];
-
-    while (baseIndex < numSplats) {
-      const layer = Math.floor(baseIndex / layerSize);
-      const layerBase = layer * layerSize;
-      const layerYEnd = Math.min(
-        SPLAT_TEX_HEIGHT,
-        Math.ceil((numSplats - layerBase) / SPLAT_TEX_WIDTH),
-      );
-
-      // Compute the subarray that this layer of readback corresponds to
-      const readbackSize = SPLAT_TEX_WIDTH * layerYEnd * 4;
-      const subReadback = readbackUint8.subarray(
-        layerBase * 4,
-        layerBase * 4 + readbackSize,
-      );
-      renderer.setRenderTarget(current.target, layer);
-
-      const promise = renderer.readRenderTargetPixelsAsync(
-        current.target,
-        0,
-        0,
-        SPLAT_TEX_WIDTH,
-        layerYEnd,
-        subReadback,
-        undefined,
-        current.extSplats ? 2 : 1,
-      );
-      promises.push(promise);
-
-      if (this.flushAfterRead) {
-        const gl = renderer.getContext() as WebGL2RenderingContext;
-        gl.flush();
+    this.depthReadback ??= new SplatDepthReadback(gl);
+    await this.depthReadback.read(readbackUint8, () => {
+      try {
+        for (let base = 0; base < numSplats; base += layerSize) {
+          const rows = Math.min(SPLAT_TEX_HEIGHT, Math.ceil((numSplats - base) / SPLAT_TEX_WIDTH));
+          renderer.setRenderTarget(target, base / layerSize);
+          gl.readBuffer(gl.COLOR_ATTACHMENT0 + (current.extSplats ? 2 : 1));
+          gl.readPixels(0, 0, SPLAT_TEX_WIDTH, rows, gl.RGBA, gl.UNSIGNED_BYTE, base * 4);
+        }
+      } finally {
+        renderer.setRenderTarget(renderState.target, activeLayer, mipLevel);
+        renderer.xr.enabled = renderState.xrEnabled;
+        renderer.autoClear = renderState.autoClear;
+        gl.readBuffer(previousReadBuffer);
       }
-
-      baseIndex += SPLAT_TEX_WIDTH * layerYEnd;
-    }
-
-    this.resetRenderState(renderer, renderState);
-    return Promise.all(promises).then(() => readback);
+    });
+    return readback;
   }
 
   private saveRenderState(renderer: THREE.WebGLRenderer) {

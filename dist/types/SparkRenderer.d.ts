@@ -345,6 +345,8 @@ export declare class SparkRenderer extends THREE.Mesh {
     sortedCenter: THREE.Vector3;
     sortedDir: THREE.Vector3;
     readback32: Uint32Array<ArrayBuffer>;
+    private depthReadback?;
+    private disposed;
     enableLod: boolean;
     enableDriveLod: boolean;
     enableLodFetching: boolean;
@@ -415,6 +417,7 @@ export declare class SparkRenderer extends THREE.Mesh {
     targetPixels?: Uint8Array;
     superXY: number;
     flushAfterGenerate: boolean;
+    /** @deprecated Depth snapshots always flush their completion fence. */
     flushAfterRead: boolean;
     readPause: number;
     sortPause: number;
@@ -525,6 +528,7 @@ export declare class SparkRenderer extends THREE.Mesh {
     }): Promise<void>;
     private updateInternal;
     private driveSort;
+    private sortCurrent;
     private ensureLodWorker;
     defaultSplatTarget(): 500000 | 750000 | 1000000 | 1500000 | 2500000;
     private driveLod;
