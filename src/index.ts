@@ -3,6 +3,7 @@ export {
   type SparkRendererOptions,
 } from "./SparkRenderer";
 export { SplatAccumulator, type GeneratorMapping } from "./SplatAccumulator";
+export { SplatProgramMode, SplatProgramRegistry } from "./SplatProgramRegistry";
 
 export * as dyno from "./dyno";
 

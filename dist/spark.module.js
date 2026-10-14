@@ -3886,6 +3886,11 @@ class DynoProgram {
   prepareMaterial() {
     return getMaterial(this);
   }
+  dispose() {
+    var _a2;
+    (_a2 = programMaterial.get(this)) == null ? void 0 : _a2.dispose();
+    programMaterial.delete(this);
+  }
   update() {
     for (const updater of this.updaters) {
       updater();
@@ -13078,10 +13083,55 @@ const emptyLodIndices = (() => {
   texture2.needsUpdate = true;
   return texture2;
 })();
+var SplatProgramMode = /* @__PURE__ */ ((SplatProgramMode2) => {
+  SplatProgramMode2[SplatProgramMode2["Packed"] = 0] = "Packed";
+  SplatProgramMode2[SplatProgramMode2["PackedCovariance"] = 1] = "PackedCovariance";
+  SplatProgramMode2[SplatProgramMode2["Extended"] = 2] = "Extended";
+  SplatProgramMode2[SplatProgramMode2["ExtendedCovariance"] = 3] = "ExtendedCovariance";
+  return SplatProgramMode2;
+})(SplatProgramMode || {});
+class SplatProgramRegistry {
+  constructor() {
+    this.programs = /* @__PURE__ */ new Map();
+  }
+  get(generator, mode, create) {
+    let modes = this.programs.get(generator);
+    if (!modes) {
+      modes = /* @__PURE__ */ new Map();
+      this.programs.set(generator, modes);
+    }
+    let program = modes.get(mode);
+    if (!program) {
+      program = create();
+      modes.set(mode, program);
+    }
+    return program;
+  }
+  retain(nodes) {
+    const retained = /* @__PURE__ */ new Set();
+    for (const node of nodes) {
+      if (node.generator) retained.add(node.generator);
+      if (node.covGenerator) retained.add(node.covGenerator);
+    }
+    for (const [generator, modes] of this.programs) {
+      if (!retained.has(generator)) {
+        for (const program of modes.values()) program.dispose();
+        this.programs.delete(generator);
+      }
+    }
+  }
+  dispose() {
+    for (const modes of this.programs.values()) {
+      for (const program of modes.values()) program.dispose();
+    }
+    this.programs.clear();
+  }
+}
 const _SplatAccumulator = class _SplatAccumulator {
   constructor({
     extSplats,
-    covSplats
+    covSplats,
+    programs
   } = {}) {
     this.time = 0;
     this.deltaTime = 0;
@@ -13101,8 +13151,14 @@ const _SplatAccumulator = class _SplatAccumulator {
     }
     this.extSplats = extSplats ?? true;
     this.covSplats = covSplats ?? false;
+    this.programs = programs ?? new SplatProgramRegistry();
+    this.ownsPrograms = programs === void 0;
   }
   dispose() {
+    this.disposeTarget();
+    if (this.ownsPrograms) this.programs.dispose();
+  }
+  disposeTarget() {
     if (this.target) {
       this.target.dispose();
       this.target = null;
@@ -13135,7 +13191,7 @@ const _SplatAccumulator = class _SplatAccumulator {
     if (this.target && (maxSplats ?? 1) <= this.maxSplats) {
       return false;
     }
-    this.dispose();
+    this.disposeTarget();
     const textureSize2 = getTextureSize(maxSplats ?? 1);
     const { width, height, depth } = textureSize2;
     this.maxSplats = textureSize2.maxSplats;
@@ -13190,8 +13246,8 @@ const _SplatAccumulator = class _SplatAccumulator {
     if (!theGenerator) {
       throw new Error("Either generator or covGenerator must be provided");
     }
-    let program = _SplatAccumulator.generatorProgram.get(theGenerator);
-    if (!program) {
+    const mode = this.extSplats ? this.covSplats ? SplatProgramMode.ExtendedCovariance : SplatProgramMode.Extended : this.covSplats ? SplatProgramMode.PackedCovariance : SplatProgramMode.Packed;
+    const program = this.programs.get(theGenerator, mode, () => {
       const graph = dynoBlock(
         { index: "int" },
         {},
@@ -13299,22 +13355,20 @@ const _SplatAccumulator = class _SplatAccumulator {
           return void 0;
         }
       );
-      program = new DynoProgram({
+      return new DynoProgram({
         graph,
         inputs: { index: "_index" },
         outputs: {},
         template: this.extSplats ? _SplatAccumulator.programExtTemplate : _SplatAccumulator.programTemplate
         // consoleLog: true,
       });
-      _SplatAccumulator.generatorProgram.set(theGenerator, program);
-    }
+    });
     Object.assign(program.uniforms, {
       targetLayer: { value: 0 },
       targetBase: { value: 0 },
       targetCount: { value: 0 }
     });
     const material = program.prepareMaterial();
-    _SplatAccumulator.fullScreenQuad.material = material;
     return { program, material };
   }
   generate({
@@ -13340,28 +13394,35 @@ const _SplatAccumulator = class _SplatAccumulator {
     const layerSize = SPLAT_TEX_WIDTH * SPLAT_TEX_HEIGHT;
     material.uniforms.targetBase.value = base;
     material.uniforms.targetCount.value = count;
-    while (base < nextBase) {
-      const layer = Math.floor(base / layerSize);
-      material.uniforms.targetLayer.value = layer;
-      const layerBase = layer * layerSize;
-      const layerYStart = Math.floor((base - layerBase) / SPLAT_TEX_WIDTH);
-      const layerYEnd = Math.min(
-        SPLAT_TEX_HEIGHT,
-        Math.ceil((nextBase - layerBase) / SPLAT_TEX_WIDTH)
-      );
-      this.target.scissor.set(
-        0,
-        layerYStart,
-        SPLAT_TEX_WIDTH,
-        layerYEnd - layerYStart
-      );
-      renderer.setRenderTarget(this.target, layer);
-      renderer.xr.enabled = false;
-      renderer.autoClear = false;
-      _SplatAccumulator.fullScreenQuad.render(renderer);
-      base += SPLAT_TEX_WIDTH * (layerYEnd - layerYStart);
+    const quad = _SplatAccumulator.fullScreenQuad;
+    const previousMaterial = quad.material;
+    quad.material = material;
+    try {
+      while (base < nextBase) {
+        const layer = Math.floor(base / layerSize);
+        material.uniforms.targetLayer.value = layer;
+        const layerBase = layer * layerSize;
+        const layerYStart = Math.floor((base - layerBase) / SPLAT_TEX_WIDTH);
+        const layerYEnd = Math.min(
+          SPLAT_TEX_HEIGHT,
+          Math.ceil((nextBase - layerBase) / SPLAT_TEX_WIDTH)
+        );
+        this.target.scissor.set(
+          0,
+          layerYStart,
+          SPLAT_TEX_WIDTH,
+          layerYEnd - layerYStart
+        );
+        renderer.setRenderTarget(this.target, layer);
+        renderer.xr.enabled = false;
+        renderer.autoClear = false;
+        quad.render(renderer);
+        base += SPLAT_TEX_WIDTH * (layerYEnd - layerYStart);
+      }
+    } finally {
+      quad.material = previousMaterial;
+      this.resetRenderState(renderer, renderState);
     }
-    this.resetRenderState(renderer, renderState);
     return { nextBase };
   }
   prepareGenerate({
@@ -13384,8 +13445,10 @@ const _SplatAccumulator = class _SplatAccumulator {
     this.time = time;
     this.deltaTime = time - previous.time;
     const allGenerators = [];
+    const residentGenerators = [];
     scene.traverse((node) => {
       if (node instanceof SplatGenerator) {
+        residentGenerators.push(node);
         if (!camera.layers || camera.layers.test(node.layers)) {
           allGenerators.push(node);
         }
@@ -13424,6 +13487,7 @@ const _SplatAccumulator = class _SplatAccumulator {
         object.generatorError = error;
       }
     }
+    this.programs.retain(residentGenerators);
     const visibleGenerators = [];
     scene.traverseVisible((node) => {
       if (node instanceof SplatGenerator) {
@@ -13609,7 +13673,6 @@ _SplatAccumulator.programExtTemplate = new DynoProgramTemplate(
 _SplatAccumulator.programTemplate = new DynoProgramTemplate(
   getShaders().computeUvec4Vec4Template
 );
-_SplatAccumulator.generatorProgram = /* @__PURE__ */ new WeakMap();
 _SplatAccumulator.fullScreenQuad = new FullScreenQuad(
   new THREE.RawShaderMaterial({ visible: false })
 );
@@ -13759,6 +13822,7 @@ const _SparkRenderer = class _SparkRenderer extends THREE.Mesh {
     this.maxSplats = 0;
     this.activeSplats = 0;
     this.accumulators = [];
+    this.programs = new SplatProgramRegistry();
     this.sorting = false;
     this.sortDirty = false;
     this.lastSortTime = 0;
@@ -13832,7 +13896,8 @@ const _SparkRenderer = class _SparkRenderer extends THREE.Mesh {
     this.clock = options.clock ? cloneClock(options.clock) : new THREE.Clock();
     const accumulatorOptions = {
       extSplats: this.accumExtSplats,
-      covSplats: this.covSplats
+      covSplats: this.covSplats,
+      programs: this.programs
     };
     this.display = new SplatAccumulator(accumulatorOptions);
     this.current = this.display;
@@ -13970,6 +14035,7 @@ const _SparkRenderer = class _SparkRenderer extends THREE.Mesh {
     for (const accumulator of accumulators) {
       accumulator.dispose();
     }
+    this.programs.dispose();
     const instances = this.lodInstances.values();
     this.lodInstances.clear();
     for (const instance of instances) {
@@ -20019,6 +20085,8 @@ export {
   SplatMesh,
   SplatModifier,
   SplatPager,
+  SplatProgramMode,
+  SplatProgramRegistry,
   SplatSkinning,
   SplatSkinningMode,
   SplatTransformer,

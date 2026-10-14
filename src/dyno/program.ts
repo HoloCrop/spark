@@ -55,6 +55,11 @@ export class DynoProgram {
     return getMaterial(this);
   }
 
+  dispose() {
+    programMaterial.get(this)?.dispose();
+    programMaterial.delete(this);
+  }
+
   update() {
     for (const updater of this.updaters) {
       updater();

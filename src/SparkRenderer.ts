@@ -10,6 +10,7 @@ import {
 } from ".";
 import { SplatAccumulator } from "./SplatAccumulator";
 import { SplatGeometry } from "./SplatGeometry";
+import { SplatProgramRegistry } from "./SplatProgramRegistry";
 import { SplatWorker } from "./SplatWorker";
 import { ReadbackCancelledError, SplatDepthReadback } from "./SplatDepthReadback";
 import { SPLAT_TEX_HEIGHT, SPLAT_TEX_WIDTH } from "./defines";
@@ -376,6 +377,7 @@ export class SparkRenderer extends THREE.Mesh {
   display: SplatAccumulator;
   current: SplatAccumulator;
   accumulators: SplatAccumulator[] = [];
+  private readonly programs = new SplatProgramRegistry();
 
   sorting = false;
   sortDirty = false;
@@ -568,6 +570,7 @@ export class SparkRenderer extends THREE.Mesh {
     const accumulatorOptions = {
       extSplats: this.accumExtSplats,
       covSplats: this.covSplats,
+      programs: this.programs,
     };
     this.display = new SplatAccumulator(accumulatorOptions);
     this.current = this.display;
@@ -714,6 +717,7 @@ export class SparkRenderer extends THREE.Mesh {
     for (const accumulator of accumulators) {
       accumulator.dispose();
     }
+    this.programs.dispose();
 
     const instances = this.lodInstances.values();
     this.lodInstances.clear();

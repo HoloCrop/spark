@@ -2,6 +2,7 @@ import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { Readback } from './Readback';
 import { CovSplatGenerator, GsplatGenerator, SplatGenerator } from './SplatGenerator';
 import { SplatMesh } from './SplatMesh';
+import { SplatProgramRegistry } from './SplatProgramRegistry';
 import { DynoBool, DynoProgram, DynoProgramTemplate, DynoUsampler2DArray, DynoVec3 } from './dyno';
 import * as THREE from "three";
 export type GeneratorMapping = {
@@ -30,13 +31,17 @@ export declare class SplatAccumulator {
     mappingVersion: number;
     extSplats: boolean;
     covSplats: boolean;
+    readonly programs: SplatProgramRegistry;
+    private readonly ownsPrograms;
     readback: Readback | null;
     readbackSplats: DynoUsampler2DArray<"extSplats", THREE.DataArrayTexture>[];
-    constructor({ extSplats, covSplats, }?: {
+    constructor({ extSplats, covSplats, programs, }?: {
         extSplats?: boolean;
         covSplats?: boolean;
+        programs?: SplatProgramRegistry;
     });
     dispose(): void;
+    private disposeTarget;
     getTextures(): THREE.DataArrayTexture[];
     static emptyTexture: THREE.DataArrayTexture;
     static emptyTextures: THREE.DataArrayTexture[];
@@ -58,7 +63,6 @@ export declare class SplatAccumulator {
     };
     static programExtTemplate: DynoProgramTemplate;
     static programTemplate: DynoProgramTemplate;
-    static generatorProgram: WeakMap<GsplatGenerator | CovSplatGenerator, DynoProgram>;
     static fullScreenQuad: FullScreenQuad;
     generate({ generator, covGenerator, base, count, renderer, }: {
         generator?: GsplatGenerator;
