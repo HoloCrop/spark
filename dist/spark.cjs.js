@@ -11816,6 +11816,7 @@ const _SplatPager = class _SplatPager {
     texture2.type = type;
     texture2.internalFormat = internalFormat;
     texture2.needsUpdate = true;
+    texture2.source.dataReady = false;
     this.renderer.initTexture(texture2);
     return texture2;
   }
@@ -11941,19 +11942,11 @@ const _SplatPager = class _SplatPager {
     this.ensureShTextures(numSh);
     if (labels !== void 0) {
       this.ensureLabelTextures();
-      const labels_arr = labels;
-      const array = this.labelTexture.value.image.data;
-      array.subarray(pageBase, pageBase + labels_arr.length).set(labels_arr);
-      this.labelTexture.value.addLayerUpdate(page);
-      this.labelTexture.value.needsUpdate = true;
+      uploadTextureLayer(this.labelTexture, page, pageBase, labels);
     }
     if (instances !== void 0) {
       this.ensureInstanceTextures();
-      const instances_arr = instances;
-      const array = this.instanceTexture.value.image.data;
-      array.subarray(pageBase, pageBase + instances_arr.length).set(instances_arr);
-      this.instanceTexture.value.addLayerUpdate(page);
-      this.instanceTexture.value.needsUpdate = true;
+      uploadTextureLayer(this.instanceTexture, page, pageBase, instances);
     }
     for (let i = 0; i < shArrays.length; i++) {
       const array = shArrays[i];

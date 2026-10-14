@@ -990,6 +990,8 @@ export class SplatPager {
     texture.type = type;
     texture.internalFormat = internalFormat;
     texture.needsUpdate = true;
+    // Allocate zeroed GPU storage; streamed pages publish only their changed layers.
+    texture.source.dataReady = false;
     this.renderer.initTexture(texture);
     return texture;
   }
@@ -1161,20 +1163,12 @@ export class SplatPager {
     this.ensureShTextures(numSh);
     if ( labels !== undefined ) {
       this.ensureLabelTextures();
-      const labels_arr = labels as Uint32Array<ArrayBuffer>;
-      const array = this.labelTexture.value.image.data;
-      array.subarray(pageBase, pageBase + labels_arr.length).set(labels_arr);
-      this.labelTexture.value.addLayerUpdate(page);
-      this.labelTexture.value.needsUpdate = true;
+      uploadTextureLayer(this.labelTexture, page, pageBase, labels);
     }
 
     if ( instances !== undefined ) {
       this.ensureInstanceTextures();
-      const instances_arr = instances as Uint32Array<ArrayBuffer>;
-      const array = this.instanceTexture.value.image.data;
-      array.subarray(pageBase, pageBase + instances_arr.length).set(instances_arr);
-      this.instanceTexture.value.addLayerUpdate(page);
-      this.instanceTexture.value.needsUpdate = true;
+      uploadTextureLayer(this.instanceTexture, page, pageBase, instances);
     }
 
     for (let i = 0; i < shArrays.length; i++) {
