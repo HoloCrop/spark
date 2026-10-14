@@ -4,27 +4,20 @@ import { ReadbackCancelledError, SplatDepthReadback, type ReadbackScheduler } fr
 
 type BufferStorage = { bytes: Uint8Array; deleted: boolean };
 type Fence = { deleted: boolean };
-type PendingTask = { kind: "gpu" | "copy"; resume: () => void };
+type PendingTask = { resume: () => void };
 
 class ControlledScheduler implements ReadbackScheduler {
-  time = 0;
   pending: PendingTask[] = [];
-  disposed = false;
   events: string[] = [];
 
-  now() { return this.time; }
-  waitForGPU(signal: AbortSignal) { return this.wait(signal, "gpu"); }
-  yieldToMain(signal: AbortSignal) { return this.wait(signal, "copy"); }
-  dispose() { this.disposed = true; }
-
-  wait(signal: AbortSignal, kind: PendingTask["kind"]) {
-    this.events.push(kind);
+  waitForGPU(signal: AbortSignal) {
+    this.events.push("gpu");
     return new Promise<void>((resolve, reject) => {
       const remove = () => {
         signal.removeEventListener("abort", abort);
         this.pending.splice(this.pending.indexOf(task), 1);
       };
-      const task = { kind, resume: () => { remove(); resolve(); } };
+      const task = { resume: () => { remove(); resolve(); } };
       const abort = () => { remove(); reject(new ReadbackCancelledError()); };
       this.pending.push(task);
       signal.addEventListener("abort", abort, { once: true });
@@ -92,12 +85,12 @@ class ReadbackContext {
   clientWaitSync() { return this.status; }
   deleteSync(fence: Fence) { fence.deleted = true; }
   isContextLost() { return this.lost; }
-  getBufferSubData(target: number, offset: number, destination: Uint8Array, destinationOffset: number, length: number) {
+  getBufferSubData(target: number, offset: number, destination: Uint8Array) {
+    const length = destination.length;
     assert.equal(target, this.PIXEL_PACK_BUFFER);
     assert.equal(this.bound!.deleted, false);
     this.copies.push({ offset, length });
-    destination.set(this.bound!.bytes.subarray(offset, offset + length), destinationOffset);
-    this.scheduler.time += length / (128 * 1024);
+    destination.set(this.bound!.bytes.subarray(offset, offset + length));
   }
 }
 
@@ -120,7 +113,7 @@ async function finish(promise: Promise<void>, scheduler: ControlledScheduler) {
   await settled;
 }
 
-test("depth readback preserves one complete layered snapshot across yields and reuses its buffer", async () => {
+test("depth readback transfers one complete layered snapshot after the fence and reuses its buffer", async () => {
   const { scheduler, context, previous, readback } = fixture();
   const firstLayer = new Uint8Array(2 * 1024 * 1024).fill(23);
   const secondLayer = new Uint8Array(2 * 1024 * 1024).fill(71);
@@ -141,18 +134,21 @@ test("depth readback preserves one complete layered snapshot across yields and r
   assert.equal(context.copies.length, 0);
   firstLayer.fill(0);
   secondLayer.fill(0);
+  context.status = context.TIMEOUT_EXPIRED;
   await scheduler.resume();
-  assert.ok(context.copies.length > 0);
-  assert.equal(scheduler.pending[0].kind, "copy");
-  assert.equal(completed, false, "a partial CPU copy must not publish a sort input");
+  assert.equal(context.copies.length, 0);
+  assert.equal(completed, false, "an unfinished GPU snapshot must not publish a sort input");
   assert.equal(context.bound, previous);
 
-  // Another renderer operation changes the binding while this readback is paused.
+  // Another renderer operation changes the binding while the GPU work is pending.
   const intervening = context.createBuffer();
   context.bound = intervening;
+  context.status = context.CONDITION_SATISFIED;
   await finish(pending, scheduler);
   assert.equal(context.bound, intervening);
   assert.deepEqual(destination, expected);
+  assert.deepEqual(context.copies, [{ offset: 0, length: destination.length }],
+    "each snapshot incurs only one synchronous driver transfer");
   assert.equal(storage[0], 199);
   assert.equal(storage[storage.length - 1], 199);
   assert.ok(context.fences.every((fence) => fence.deleted));
@@ -179,13 +175,12 @@ test("an empty read completes without copying and leaves the reader reusable", a
   readback.dispose();
 });
 
-for (const phase of ["gpu", "copy"] as const) {
-  test(`disposing during ${phase} wait cancels the readback without further copies`, async () => {
+for (const phase of ["pending fence", "ready continuation"] as const) {
+  test(`disposing during ${phase} cancels the readback without copying`, async () => {
     const { scheduler, context, previous, readback } = fixture();
     const destination = new Uint8Array(4 * 1024 * 1024);
     const pending = readback.read(destination, () => context.snapshotLayer(0, destination));
-    if (phase === "copy") await scheduler.resume();
-    assert.equal(scheduler.pending[0].kind, phase);
+    if (phase === "ready continuation") scheduler.pending[0].resume();
     const copied = context.copies.length;
     const rejected = assert.rejects(pending, ReadbackCancelledError);
     readback.dispose();
@@ -193,7 +188,6 @@ for (const phase of ["gpu", "copy"] as const) {
     assert.equal(context.copies.length, copied);
     assert.equal(context.bound, previous);
     assert.equal(scheduler.pending.length, 0);
-    assert.equal(scheduler.disposed, true);
     assert.ok(context.fences.every((fence) => fence.deleted));
     assert.equal(context.buffers[1].deleted, true);
     let snapshots = 0;
@@ -211,7 +205,6 @@ test("context loss cancels the snapshot and restoration permits a fresh readback
   context.canvas.dispatchEvent(new Event("webglcontextlost"));
   await rejected;
   assert.equal(context.buffers[1].deleted, true);
-  assert.equal(scheduler.disposed, false);
   await assert.rejects(readback.read(destination, () => {}), ReadbackCancelledError);
 
   context.lost = false;

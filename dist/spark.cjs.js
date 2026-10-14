@@ -13659,61 +13659,28 @@ class ReadbackCancelledError extends Error {
     super("Depth readback cancelled");
   }
 }
-class ReadbackTasks {
-  constructor() {
-    this.channel = new MessageChannel();
-    this.nextId = 0;
-    this.channel.port1.onmessage = ({ data }) => {
-      const pending = this.pending;
-      if (pending && pending.id === data) pending.resume();
+function waitForGPU(signal) {
+  return new Promise((resolve, reject) => {
+    const finish = () => {
+      signal.removeEventListener("abort", cancel);
+      resolve();
     };
-  }
-  now() {
-    return performance.now();
-  }
-  waitForGPU(signal) {
-    return this.wait(signal, true);
-  }
-  yieldToMain(signal) {
-    return this.wait(signal, false);
-  }
-  wait(signal, poll) {
-    return new Promise((resolve, reject) => {
-      let timer;
-      const finish = () => {
-        signal.removeEventListener("abort", cancel);
-        this.pending = void 0;
-        resolve();
-      };
-      const cancel = () => {
-        clearTimeout(timer);
-        this.pending = void 0;
-        reject(new ReadbackCancelledError());
-      };
-      signal.addEventListener("abort", cancel, { once: true });
-      if (signal.aborted) cancel();
-      else if (poll) timer = setTimeout(finish, 4);
-      else {
-        const id = ++this.nextId;
-        this.pending = { id, resume: finish };
-        this.channel.port2.postMessage(id);
-      }
-    });
-  }
-  dispose() {
-    this.channel.port1.close();
-    this.channel.port2.close();
-  }
+    const cancel = () => {
+      clearTimeout(timer);
+      reject(new ReadbackCancelledError());
+    };
+    const timer = setTimeout(finish, 4);
+    signal.addEventListener("abort", cancel, { once: true });
+    if (signal.aborted) cancel();
+  });
 }
 class SplatDepthReadback {
-  constructor(gl, scheduler = new ReadbackTasks()) {
+  constructor(gl, scheduler = { waitForGPU }) {
     this.gl = gl;
     this.scheduler = scheduler;
     this.buffer = null;
     this.capacity = 0;
     this.disposed = false;
-    this.copyBytes = 1024 * 1024;
-    this.copyBudgetMs = 2;
     this.contextLost = () => {
       var _a2;
       (_a2 = this.active) == null ? void 0 : _a2.abort();
@@ -13732,7 +13699,6 @@ class SplatDepthReadback {
     (_a2 = this.active) == null ? void 0 : _a2.abort();
     this.gl.canvas.removeEventListener("webglcontextlost", this.contextLost);
     this.releaseBuffer();
-    this.scheduler.dispose();
   }
   async read(destination, snapshot) {
     if (this.disposed || this.gl.isContextLost()) throw new ReadbackCancelledError();
@@ -13764,22 +13730,13 @@ class SplatDepthReadback {
         if (status === gl.WAIT_FAILED) throw new Error("Depth readback fence failed");
         if (status !== gl.TIMEOUT_EXPIRED) break;
       }
-      let turnStarted = this.scheduler.now();
-      for (let offset = 0; offset < destination.byteLength; ) {
-        const bytes = Math.min(this.copyBytes, destination.byteLength - offset);
-        const previous2 = gl.getParameter(gl.PIXEL_PACK_BUFFER_BINDING);
-        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.buffer);
-        try {
-          gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, offset, destination, offset, bytes);
-        } finally {
-          gl.bindBuffer(gl.PIXEL_PACK_BUFFER, previous2);
-        }
-        offset += bytes;
-        if (offset < destination.byteLength && this.scheduler.now() - turnStarted >= this.copyBudgetMs) {
-          await this.scheduler.yieldToMain(signal);
-          if (signal.aborted) throw new ReadbackCancelledError();
-          turnStarted = this.scheduler.now();
-        }
+      if (destination.byteLength === 0) return;
+      const previousCopyBuffer = gl.getParameter(gl.PIXEL_PACK_BUFFER_BINDING);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.buffer);
+      try {
+        gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, destination);
+      } finally {
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, previousCopyBuffer);
       }
     } finally {
       if (fence) gl.deleteSync(fence);
