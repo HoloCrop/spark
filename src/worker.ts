@@ -20,12 +20,15 @@ import init_wasm, {
   get_lod_tree_level,
 } from "spark-rs";
 import type { ExtResult, PackedResult, SplatEncoding } from "./defines";
+import { preparePagedExtResult, preparePagedPackedResult } from "./PagedSplatDecode";
 
 const rpcHandlers = {
   sortSplats16,
   sortSplats32,
   loadPackedSplats,
   loadExtSplats,
+  loadPagedPackedSplats,
+  loadPagedExtSplats,
   tinyLodPackedSplats,
   qualityLodPackedSplats,
   tinyLodExtSplats,
@@ -239,6 +242,28 @@ function toPackedResult(packed: DecodedPackedResult): PackedResult {
     },
     splatEncoding: packed.splatEncoding,
   };
+}
+
+async function loadPagedPackedSplats(
+  args: Parameters<typeof loadPackedSplats>[0],
+  status: Parameters<typeof loadPackedSplats>[1],
+) {
+  const result = await loadPackedSplats(args, status);
+  if (!("lodSplats" in result) || !result.lodSplats) {
+    throw new Error("Paged splats require LoD data");
+  }
+  return preparePagedPackedResult(result.lodSplats);
+}
+
+async function loadPagedExtSplats(
+  args: Parameters<typeof loadExtSplats>[0],
+  status: Parameters<typeof loadExtSplats>[1],
+) {
+  const result = await loadExtSplats(args, status);
+  if (!("lodSplats" in result) || !result.lodSplats) {
+    throw new Error("Paged splats require LoD data");
+  }
+  return preparePagedExtResult(result.lodSplats);
 }
 
 async function loadPackedSplats(

@@ -1,8 +1,8 @@
 import { SplatPager } from './SplatPager';
 export declare class SplatRaycastBlocks {
     private index?;
-    private dirtyPages;
-    update(pager: SplatPager, page: number): void;
+    private pendingPages;
+    install(pager: SplatPager, page: number, bounds: Float32Array): void;
     remove(page: number): void;
     dispose(): void;
     private refresh;

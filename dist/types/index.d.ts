@@ -1,5 +1,6 @@
 export { SparkRenderer, type SparkRendererOptions, } from './SparkRenderer';
 export { SplatAccumulator, type GeneratorMapping } from './SplatAccumulator';
+export { SplatProgramMode, SplatProgramRegistry } from './SplatProgramRegistry';
 export * as dyno from './dyno';
 export { RgbaArray, readRgbaArray } from './RgbaArray';
 export { SplatLoader, getSplatFileType, isPcSogs, } from './SplatLoader';
