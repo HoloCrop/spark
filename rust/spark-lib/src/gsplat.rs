@@ -28,11 +28,11 @@ impl Gsplat {
         Self {
             center: center.to_vec3(),
             opacity: f16::from_f32(opacity),
-            rgb: rgb.to_array().map(|v| f16::from_f32(v)),
+            rgb: rgb.to_array().map(f16::from_f32),
             ln_scales: scales.to_array().map(|v| f16::from_f32(v.ln())),
-            quaternion: quaternion.to_array().map(|v| f16::from_f32(v)),
-            label: label,
-            instance_label: instance_label
+            quaternion: quaternion.to_array().map(f16::from_f32),
+            label,
+            instance_label,
         }
     }
 }
@@ -43,7 +43,7 @@ impl std::fmt::Debug for Gsplat {
     }
 }
 
-impl<'a> Tsplat for &'a Gsplat {
+impl Tsplat for &Gsplat {
     fn center(&self) -> Vec3A {
         self.center.to_vec3a()
     }
@@ -78,7 +78,7 @@ impl<'a> Tsplat for &'a Gsplat {
 
 }
 
-impl<'a> Tsplat for &'a mut Gsplat {
+impl Tsplat for &mut Gsplat {
     fn center(&self) -> Vec3A {
         self.center.to_vec3a()
     }
@@ -112,7 +112,7 @@ impl<'a> Tsplat for &'a mut Gsplat {
     }
 }
 
-impl<'a> TsplatMut for &'a mut Gsplat {
+impl TsplatMut for &mut Gsplat {
     fn set_center(&mut self, center: Vec3A) {
         self.center = center.to_vec3();
     }
@@ -121,19 +121,16 @@ impl<'a> TsplatMut for &'a mut Gsplat {
         self.opacity = f16::from_f32(opacity);
     }
 
-
     fn set_rgb(&mut self, rgb: Vec3A) {
-        self.rgb = rgb.to_array().map(|v| f16::from_f32(v));
+        self.rgb = rgb.to_array().map(f16::from_f32);
     }
-
 
     fn set_scales(&mut self, scales: Vec3A) {
         self.ln_scales = scales.to_array().map(|v| f16::from_f32(v.ln()));
     }
 
-
     fn set_quaternion(&mut self, quaternion: Quat) {
-        self.quaternion = quaternion.to_array().map(|v| f16::from_f32(v));
+        self.quaternion = quaternion.to_array().map(f16::from_f32);
     }
 
     fn set_label(&mut self, label: u32) {
@@ -151,7 +148,7 @@ pub struct GsplatSH1(pub [[f16; 3]; 3]);
 
 impl GsplatSH1 {
     pub fn new(rgb3: [Vec3A; 3]) -> Self {
-        Self(rgb3.map(|rgb| rgb.to_array().map(|v| f16::from_f32(v))))
+        Self(rgb3.map(|rgb| rgb.to_array().map(f16::from_f32)))
     }
 
     pub fn set_from_array(&mut self, rgb3: &[f32]) {
@@ -174,7 +171,7 @@ pub struct GsplatSH2(pub [[f16; 3]; 5]);
 
 impl GsplatSH2 {
     pub fn new(rgb5: [Vec3A; 5]) -> Self {
-        Self(rgb5.map(|rgb| rgb.to_array().map(|v| f16::from_f32(v))))
+        Self(rgb5.map(|rgb| rgb.to_array().map(f16::from_f32)))
     }
 
     pub fn set_from_array(&mut self, rgb5: &[f32]) {
@@ -200,7 +197,7 @@ pub struct GsplatSH3(pub [[f16; 3]; 7]);
 
 impl GsplatSH3 {
     pub fn new(rgb7: [Vec3A; 7]) -> Self {
-        Self(rgb7.map(|rgb| rgb.to_array().map(|v| f16::from_f32(v))))
+        Self(rgb7.map(|rgb| rgb.to_array().map(f16::from_f32)))
     }
 
     pub fn set_from_array(&mut self, rgb7: &[f32]) {
@@ -299,7 +296,7 @@ impl TsplatArray for GsplatArray {
     }
 
     fn prepare_children(&mut self) {
-        self.children.resize_with(self.len(), || SmallVec::new());
+        self.children.resize_with(self.len(), SmallVec::new);
     }
 
     fn has_children(&self) -> bool {
@@ -349,7 +346,7 @@ impl TsplatArray for GsplatArray {
         // into kernel shape units. Equal co-located shapes remain unchanged.
 
         for (i, &index) in indices.iter().enumerate() {
-            let splat = &self.splats[index as usize];
+            let splat = &self.splats[index];
             let weight = weights[i];
             let delta = splat.center() - center;
             let cov = SymMat3::new_scale_quaternion(splat.scales(), splat.quaternion());
@@ -425,15 +422,8 @@ impl TsplatArray for GsplatArray {
             (scales, opacity)
         };
 
-        let mut label: u32 = 0;
-        let mut instance_label: u32 = 0;
-        if let Some(first_index) = indices.get(0).copied(){
-            let first_splat = &self.splats[first_index];
-            label = (*first_splat).label as u32;
-            instance_label = (*first_splat).instance_label as u32;
-        }
-        
-        
+        let first = &self.splats[indices[0]];
+        let (label, instance_label) = (first.label, first.instance_label);
         self.splats.push(Gsplat::new(center, opacity, rgb, scales, quaternion, label, instance_label));
         self.children.push(indices.iter().copied().collect());
 
@@ -488,7 +478,7 @@ impl TsplatArray for GsplatArray {
     }
 
     fn get_child_count_start(&self, index: usize) -> (usize, usize) {
-        (self.children[index].len(), self.children[index].first().copied().unwrap_or(0) as usize)
+        (self.children[index].len(), self.children[index].first().copied().unwrap_or(0))
     }
 
 
@@ -512,8 +502,8 @@ impl TsplatArray for GsplatArray {
         similarity_metric_with_moments(&self.get(a), &self.get(b), self.kernel.moment_factor())
     }
 
-    fn retain<F: (FnMut(&mut Gsplat) -> bool)>(&mut self, mut f: F) {
-        let keep: Vec<bool> = self.splats.iter_mut().map(|splat| f(splat)).collect();
+    fn retain<F: (FnMut(&mut Gsplat) -> bool)>(&mut self, f: F) {
+        let keep: Vec<bool> = self.splats.iter_mut().map(f).collect();
         let mut bits = keep.iter();
         self.splats.retain(|_splat| *bits.next().unwrap());
         if !self.children.is_empty() {
@@ -694,8 +684,7 @@ impl GsplatArray {
 
     pub fn to_packed_array(&self, encoding: &SplatEncoding) -> (usize, Vec<u32>) {
         let (_, _, _, max_splats) = get_splat_tex_size(self.splats.len());
-        let mut packed = Vec::new();
-        packed.resize(max_splats * 4, 0);
+        let mut packed = vec![0; max_splats * 4];
 
         for i in 0..self.splats.len() {
             let i4 = i * 4;
@@ -719,16 +708,13 @@ impl GsplatArray {
             return Vec::new();
         }
         let (_, _, _, max_splats) = get_splat_tex_size(self.splats.len());
-        let mut sh1 = Vec::new();
-        sh1.resize(max_splats * 2, 0);
+        let mut sh1 = vec![0; max_splats * 2];
         let SplatEncoding { sh1_max, .. } = encoding;
 
         for i in 0..self.splats.len() {
             let i2 = i * 2;
             let encoded = encode_sh1(&self.sh1[i].to_array(), *sh1_max);
-            for w in 0..2 {
-                sh1[i2 + w] = encoded[w];
-            }
+            sh1[i2..(i2 + 2)].copy_from_slice(&encoded);
         }
         sh1
     }
@@ -738,16 +724,13 @@ impl GsplatArray {
             return Vec::new();
         }
         let (_, _, _, max_splats) = get_splat_tex_size(self.splats.len());
-        let mut sh2 = Vec::new();
-        sh2.resize(max_splats * 4, 0);
+        let mut sh2 = vec![0; max_splats * 4];
         let SplatEncoding { sh2_max, .. } = encoding;
         
         for i in 0..self.splats.len() {
             let i4 = i * 4;
             let encoded = encode_sh2(&self.sh2[i].to_array(), *sh2_max);
-            for w in 0..4 {
-                sh2[i4 + w] = encoded[w];
-            }
+            sh2[i4..(i4 + 4)].copy_from_slice(&encoded);
         }
         sh2
     }
@@ -757,16 +740,13 @@ impl GsplatArray {
             return Vec::new();
         }
         let (_, _, _, max_splats) = get_splat_tex_size(self.splats.len());
-        let mut sh3 = Vec::new();
-        sh3.resize(max_splats * 4, 0);
+        let mut sh3 = vec![0; max_splats * 4];
         let SplatEncoding { sh3_max, .. } = encoding;
 
         for i in 0..self.splats.len() {
             let i4 = i * 4;
             let encoded = encode_sh3(&self.sh3[i].to_array(), *sh3_max);
-            for w in 0..4 {
-                sh3[i4 + w] = encoded[w];
-            }
+            sh3[i4..(i4 + 4)].copy_from_slice(&encoded);
         }
         sh3
     }
@@ -831,27 +811,32 @@ impl SplatReceiver for GsplatArray {
             splat.set_rgb(Vec3A::from_slice(&batch.rgb[i3..i3 + 3]));
             splat.set_scales(Vec3A::from_slice(&batch.scale[i3..i3 + 3]));
             splat.set_quaternion(Quat::from_slice(&batch.quat[i4..i4 + 4]));
-            splat.set_label(batch.labels[i]);
-            splat.set_instance_label(batch.instances[i]);
         }
 
         self.set_sh(base, count, batch.sh1, batch.sh2, batch.sh3);
 
-        // if !batch.labels.is_empty() {
-        //     for i in 0..count {
-        //         let i4 = i * 4;
-        //         self.labels[base + i] = [ 
-        //             batch.labels[i4] as f32, 
-        //             batch.labels[i4 + 1] as f32, 
-        //             0.0, 
-        //             255.0
-        //         ];
-        //     }
-        // }
+        if !batch.labels.is_empty() {
+            self.set_label(base, count, batch.labels);
+        }
+        if !batch.instances.is_empty() {
+            self.set_instance_label(base, count, batch.instances);
+        }
 
         if !batch.child_count.is_empty() && !batch.child_start.is_empty() {
             self.set_child_start(base, count, batch.child_start);
             self.set_child_count(base, count, batch.child_count);
+        }
+    }
+
+    fn set_label(&mut self, base: usize, count: usize, values: &[u32]) {
+        for i in 0..count {
+            self.splats[base + i].label = values[i];
+        }
+    }
+
+    fn set_instance_label(&mut self, base: usize, count: usize, values: &[u32]) {
+        for i in 0..count {
+            self.splats[base + i].instance_label = values[i];
         }
     }
 
@@ -939,7 +924,7 @@ impl SplatReceiver for GsplatArray {
 
     fn set_child_count(&mut self, base: usize, count: usize, child_count: &[u16]) {
         for i in 0..count {
-            let mut child_index = *self.children[base + i].get(0).unwrap_or(&0);
+            let mut child_index = *self.children[base + i].first().unwrap_or(&0);
             self.children[base + i].clear();
             self.children[base + i].resize_with(child_count[i] as usize, || {
                 let child = child_index;
@@ -1020,13 +1005,13 @@ impl SplatGetter for GsplatArray {
         
     fn get_label(&mut self, base: usize, count: usize, out: &mut [u32]) {
         for i in 0..count {
-            out[i] = self.get(base + i).label() as u32;
+            out[i] = self.get(base + i).label();
         }
     }
 
     fn get_instance_label(&mut self, base: usize, count: usize, out: &mut [u32]) {
         for i in 0..count {
-            out[i] = self.get(base + i).instance_label() as u32;
+            out[i] = self.get(base + i).instance_label();
         }
     }
 
@@ -1057,7 +1042,7 @@ impl SplatGetter for GsplatArray {
     fn get_child_start(&mut self, base: usize, count: usize, out: &mut [usize]) {
         for i in 0..count {
             let children = &self.children[base + i];
-            out[i] = children.first().copied().unwrap_or(0) as usize;
+            out[i] = children.first().copied().unwrap_or(0);
         }
     }
 }

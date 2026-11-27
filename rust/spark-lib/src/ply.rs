@@ -8,6 +8,7 @@ use crate::decoder::{ChunkReceiver, SplatGetter, SplatInit, SplatProps, SplatRec
 
 pub const PLY_MAGIC: u32 = 0x00796c70; // "ply"
 const MAX_SPLAT_CHUNK: usize = 65536;
+#[allow(clippy::excessive_precision)]
 const SH_C0: f32 = 0.28209479177387814;
 const SUPER_CHUNK_SIZE: usize = 256;
 const POINT_CLOUD_PROPERTIES: [&str; 6] = ["x", "y", "z", "red", "green", "blue"];
@@ -191,7 +192,7 @@ impl<T: SplatReceiver> PlyDecoder<T> {
 
                 if let Some(label) = state.label {
                     state.out_labels[i] = label[0].get_u32(&self.buffer, base);
-                    state.out_instances[i] = (label[1].get_f32(&self.buffer, base) + (1 as f32)) as u32;
+                    state.out_instances[i] = (label[1].get_f32(&self.buffer, base) + 1.0) as u32;
                 }
 
                 if let Some(sh1) = state.sh1 {
@@ -358,6 +359,7 @@ impl<T: SplatReceiver> ChunkReceiver for PlyDecoder<T> {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 enum PlyState {
     PointCloud(PointCloudDecoderState),
     Standard(PlyDecoderState),
@@ -468,7 +470,7 @@ fn parse_header(header: &str) -> anyhow::Result<ParsedHeader> {
                 current = Some(PlyElementBuilder::new(fields[1], fields[2].parse()?));
             },
             "property" => {
-                if fields.get(1).map(|s| *s) == Some("list") {
+                if fields.get(1).copied() == Some("list") {
                     return Err(anyhow!("PLY list properties are not supported"));
                 }
                 if fields.len() != 3 {
@@ -597,7 +599,7 @@ impl SuperSplatState {
     fn new(parsed: ParsedHeader) -> anyhow::Result<Self> {
         let chunk_desc = parsed.chunk.ok_or(anyhow!("Missing chunk element for SuperSplat PLY"))?;
         let vertex_desc = parsed.vertex;
-        let expected_chunks = (vertex_desc.count + SUPER_CHUNK_SIZE - 1) / SUPER_CHUNK_SIZE;
+        let expected_chunks = vertex_desc.count.div_ceil(SUPER_CHUNK_SIZE);
         if chunk_desc.count < expected_chunks {
             return Err(anyhow!(
                 "Not enough chunk records: have {}, need at least {}",
@@ -664,13 +666,13 @@ impl SuperSplatState {
             let sh2_props: Vec<usize> = (0..5).flat_map(|k| (0..3).map(move |d| 3 + k + d * stride)).collect();
             let sh3_props: Vec<usize> = (0..7).flat_map(|k| (0..3).map(move |d| 8 + k + d * stride)).collect();
 
-            Some(SuperSplatShProps {
+            (max_sh_degree > 0).then_some(SuperSplatShProps {
                 f_rest,
                 sh1_props,
                 sh2_props,
                 sh3_props,
                 num_f_rest,
-            }).filter(|_| max_sh_degree > 0)
+            })
         } else {
             None
         };
@@ -946,7 +948,7 @@ impl PlyDecoderState {
             *properties.get("f_dc_2").ok_or(anyhow!("Missing f_dc_2 property"))?,
         ];
 
-        let label = if properties.get("label").is_some() {
+        let label = if properties.contains_key("label") {
             Some([
                 *properties.get("label").ok_or(anyhow!("??? Missing label field"))?, 
                 *properties.get("instance_label").ok_or(anyhow!("??? Missing instance_label property"))?,
@@ -1088,7 +1090,7 @@ impl PointCloudDecoderState {
             *properties.get("green").ok_or(anyhow!("Missing green property"))?,
             *properties.get("blue").ok_or(anyhow!("Missing blue property"))?,
         ];
-        let alpha = properties.get("alpha").map(|p| *p);
+        let alpha = properties.get("alpha").copied();
 
         Ok(Self {
             num_splats,
@@ -1433,8 +1435,8 @@ impl<T: SplatGetter> PlyEncoder<T> {
                             _ => 0.0,
                         }
                     };
-                    for idx in 0..num_f_rest {
-                        let d = if stride > 0 { idx / stride } else { 0 };
+                    for idx in 0usize..num_f_rest {
+                        let d = idx.checked_div(stride).unwrap_or(0);
                         let in_channel = if stride > 0 { idx % stride } else { 0 };
                         if in_channel < 3 {
                             let k = in_channel; // degree 1 (3 coeffs)

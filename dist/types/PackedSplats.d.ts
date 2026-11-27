@@ -1,13 +1,23 @@
-import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
-import { RgbaArray } from './RgbaArray';
-import { GsplatGenerator } from './SplatGenerator';
-import { SplatSource } from './SplatMesh';
-import { SplatEncoding, SplatFileType } from './defines';
-import { DynoInt, DynoProgram, DynoProgramTemplate, DynoUniform, DynoUsampler2DArray, DynoVal, DynoVec3 } from './dyno';
-import { Gsplat, TPackedSplats } from './dyno/splats';
 import * as THREE from "three";
+import { FullScreenQuad } from "three/addons/postprocessing/Pass.js";
+import type { RgbaArray } from "./RgbaArray";
+import type { GsplatGenerator } from "./SplatGenerator";
+import type { SplatSource } from "./SplatMesh";
+import { type SplatEncoding, type SplatFileType } from "./defines";
+import { DynoInt, DynoProgram, DynoProgramTemplate, DynoUniform, DynoUsampler2DArray, type DynoVal, DynoVec3 } from "./dyno";
+import { type Gsplat, TPackedSplats } from "./dyno/splats";
+type PackedSplatsExtra = {
+    sh1?: Uint32Array;
+    sh2?: Uint32Array;
+    sh3?: Uint32Array;
+    sh1Texture?: DynoUsampler2DArray<"sh1", THREE.DataArrayTexture>;
+    sh2Texture?: DynoUsampler2DArray<"sh2", THREE.DataArrayTexture>;
+    sh3Texture?: DynoUsampler2DArray<"sh3", THREE.DataArrayTexture>;
+} & Record<string, unknown>;
 export type PackedSplatsOptions = {
     url?: string;
+    requestHeader?: Record<string, string>;
+    withCredentials?: boolean;
     fileBytes?: Uint8Array | ArrayBuffer;
     fileType?: SplatFileType;
     fileName?: string;
@@ -18,8 +28,8 @@ export type PackedSplatsOptions = {
     numSplats?: number;
     construct?: (splats: PackedSplats) => Promise<void> | void;
     onProgress?: (event: ProgressEvent) => void;
-    extra?: Record<string, unknown>;
-    splatEncoding?: SplatEncoding;
+    extra?: PackedSplatsExtra;
+    splatEncoding?: Partial<SplatEncoding>;
     lod?: boolean | "quality";
     nonLod?: boolean;
     lodAbove?: number;
@@ -29,9 +39,9 @@ export declare class PackedSplats implements SplatSource {
     maxSplats: number;
     numSplats: number;
     packedArray: Uint32Array | null;
-    extra: Record<string, unknown>;
+    extra: PackedSplatsExtra;
     maxSh: number;
-    splatEncoding?: SplatEncoding;
+    splatEncoding: SplatEncoding;
     lod?: boolean | "quality";
     nonLod?: boolean;
     lodSplats?: PackedSplats;
@@ -134,3 +144,4 @@ export declare function evaluatePackedSH({ coord, viewDir, numSh, sh1Texture, sh
 }): {
     rgb: DynoVal<"vec3">;
 };
+export {};

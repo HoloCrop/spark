@@ -9,7 +9,6 @@ export declare class SplatDepthReadback {
     private gl;
     private scheduler;
     private buffer;
-    private capacity;
     private active?;
     private disposed;
     constructor(gl: WebGL2RenderingContext, scheduler?: ReadbackScheduler);

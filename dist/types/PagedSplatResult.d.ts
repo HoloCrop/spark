@@ -1,4 +1,4 @@
-import { ExtResult, PackedResult } from './defines';
+import type { ExtResult, PackedResult } from "./defines";
 export type PagedPackedResult = PackedResult & {
     extra: PackedResult["extra"] & {
         lodTree: Uint32Array;

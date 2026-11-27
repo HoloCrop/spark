@@ -1,5 +1,5 @@
-import { SplatMesh } from './SplatMesh';
 import * as THREE from "three";
+import type { SplatMesh } from "./SplatMesh";
 export interface SplatSurfaceIntersection {
     distance: number;
     point: THREE.Vector3;

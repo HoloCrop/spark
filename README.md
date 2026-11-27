@@ -58,7 +58,7 @@ Copy the following code into an `index.html` file.
     "imports": {
       "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
       "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/",
-      "@sparkjsdev/spark": "https://sparkjs.dev/releases/spark/2.1.0/spark.module.js"
+      "@sparkjsdev/spark": "https://sparkjs.dev/releases/spark/2.4.0/spark.module.js"
     }
   }
 </script>
@@ -96,7 +96,7 @@ Copy the following code into an `index.html` file.
     "imports": {
       "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
       "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/",
-      "@sparkjsdev/spark": "https://sparkjs.dev/releases/spark/2.1.0/spark.module.js"
+      "@sparkjsdev/spark": "https://sparkjs.dev/releases/spark/2.4.0/spark.module.js"
      }
   }
 </script>

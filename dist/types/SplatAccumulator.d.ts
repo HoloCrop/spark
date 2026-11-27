@@ -1,10 +1,10 @@
-import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
-import { Readback } from './Readback';
-import { CovSplatGenerator, GsplatGenerator, SplatGenerator } from './SplatGenerator';
-import { SplatMesh } from './SplatMesh';
-import { SplatProgramRegistry } from './SplatProgramRegistry';
-import { DynoBool, DynoProgram, DynoProgramTemplate, DynoUsampler2DArray, DynoVec3 } from './dyno';
 import * as THREE from "three";
+import { FullScreenQuad } from "three/addons/postprocessing/Pass.js";
+import { Readback } from "./Readback";
+import { type CovSplatGenerator, type GsplatGenerator, SplatGenerator } from "./SplatGenerator";
+import { SplatMesh } from "./SplatMesh";
+import { SplatProgramRegistry } from "./SplatProgramRegistry";
+import { DynoBool, DynoProgram, DynoProgramTemplate, DynoUsampler2DArray, DynoVec3 } from "./dyno";
 export type GeneratorMapping = {
     node: SplatGenerator;
     generator?: GsplatGenerator;
@@ -73,10 +73,10 @@ export declare class SplatAccumulator {
     }): {
         nextBase: number;
     };
-    prepareGenerate({ renderer, scene, time, camera, sortRadial, renderSize, previous, lodInstances, }: {
+    prepareGenerate({ renderer, scene, timer, camera, sortRadial, renderSize, previous, lodInstances, }: {
         renderer: THREE.WebGLRenderer;
         scene: THREE.Scene;
-        time: number;
+        timer: THREE.Timer;
         camera: THREE.Camera;
         sortRadial: boolean;
         renderSize: THREE.Vector2;
@@ -97,4 +97,5 @@ export declare class SplatAccumulator {
         splatsUpdated: boolean;
         mappingUpdated: boolean;
     };
+    mappingChanged(): boolean;
 }

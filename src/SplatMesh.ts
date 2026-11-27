@@ -2,8 +2,15 @@ import * as THREE from "three";
 
 import { ExtSplats } from "./ExtSplats";
 import { PackedSplats } from "./PackedSplats";
+import { PagedSplats, type PagedSplatsOptions } from "./PagedSplats";
 import { type RgbaArray, TRgbaArray } from "./RgbaArray";
-import { SplatEdit, SplatEditSdf, SplatEdits } from "./SplatEdit";
+import {
+  type SplatEdit,
+  type SplatEditSdf,
+  SplatEdits,
+  isSplatEdit,
+  isSplatEditSdf,
+} from "./SplatEdit";
 import {
   type CovSplatModifier,
   CovSplatTransformer,
@@ -12,13 +19,11 @@ import {
   SplatGenerator,
   SplatTransformer,
 } from "./SplatGenerator";
-import { PagedSplats, SplatPager } from "./SplatPager";
+import { SplatPager } from "./SplatPager";
 import { raycastSplatMesh, type SplatSurfaceIntersection } from "./SplatSurfaceRaycast";
 import type { SplatSkinning } from "./SplatSkinning";
 import {
   DEFAULT_SPLAT_ENCODING,
-  LN_SCALE_MAX,
-  LN_SCALE_MIN,
   type SplatEncoding,
   type SplatFileType,
 } from "./defines";
@@ -49,6 +54,11 @@ export type SplatMeshOptions = {
   // URL to fetch a Gaussian splat file from(supports .ply, .splat, .ksplat,
   // .spz formats). (default: undefined)
   url?: string;
+  // Extra HTTP headers to send when fetching from url. (default: undefined)
+  requestHeader?: Record<string, string>;
+  // Send cookies and other credentials when fetching from url, including
+  // cross-origin requests. (default: false)
+  withCredentials?: boolean;
   // Raw bytes of a Gaussian splat file to decode directly instead of fetching
   // from URL. (default: undefined)
   fileBytes?: Uint8Array | ArrayBuffer;
@@ -109,7 +119,7 @@ export type SplatMeshOptions = {
   covWorldModifiers?: CovSplatModifier[];
   // Override the default splat encoding ranges for the PackedSplats.
   // (default: undefined)
-  splatEncoding?: SplatEncoding;
+  splatEncoding?: Partial<SplatEncoding>;
   // Set to true to load/use "extended splat" encoding with float32 x/y/z
   extSplats?: boolean | ExtSplats;
   // Set to true to output covariance splats for anisotropic scaling
@@ -195,7 +205,7 @@ export class EmptySplatSource implements SplatSource {
     outTypes: { gsplat: Gsplat },
     globals: () => [defineGsplat],
     statements: ({ outputs }) =>
-      unindentLines(`
+      unindentLines(/* glsl */ `
       ${outputs.gsplat}.flags = 0u;
       return;
     `),
@@ -318,15 +328,24 @@ export class SplatMesh extends SplatGenerator {
         );
       }
       const rootUrl = options.url ?? "";
-      if (options.paged === true) {
-        this.paged = new PagedSplats({ rootUrl });
-      } else if (options.paged instanceof PagedSplats) {
+      if (options.paged instanceof PagedSplats) {
         this.paged = options.paged;
-      } else if (options.paged instanceof SplatPager) {
-        this.paged = new PagedSplats({ rootUrl, pager: options.paged });
       } else {
-        throw new Error("Invalid paged option");
+        const pagedSplatOptions: PagedSplatsOptions = {
+          rootUrl,
+          requestHeader: options.requestHeader,
+          withCredentials: options.withCredentials,
+        };
+        if (options.paged instanceof SplatPager) {
+          pagedSplatOptions.pager = options.paged;
+        } else if (options.paged === true) {
+          pagedSplatOptions.fileType = options.fileType;
+        } else {
+          throw new Error("Invalid paged option");
+        }
+        this.paged = new PagedSplats(pagedSplatOptions);
       }
+
       this.splats = this.paged;
     } else if (options.extSplats) {
       this.extSplats =
@@ -338,8 +357,9 @@ export class SplatMesh extends SplatGenerator {
       this.splats = this.extSplats;
     } else if (options.packedSplats) {
       this.packedSplats = options.packedSplats;
-      this.packedSplats.splatEncoding = options.splatEncoding ?? {
+      this.packedSplats.splatEncoding = {
         ...DEFAULT_SPLAT_ENCODING,
+        ...options.splatEncoding,
       };
       this.splats = this.packedSplats;
     } else {
@@ -415,6 +435,7 @@ export class SplatMesh extends SplatGenerator {
         this.updateGenerator();
 
         this.isInitialized = true;
+        this.dispatchEvent({ type: "initialized" });
         if (options.onLoad) {
           const maybePromise = options.onLoad(this);
           if (maybePromise instanceof Promise) {
@@ -459,6 +480,8 @@ export class SplatMesh extends SplatGenerator {
       fileName,
       stream,
       streamLength,
+      requestHeader,
+      withCredentials,
       maxSplats,
       constructSplats,
       onProgress,
@@ -476,6 +499,8 @@ export class SplatMesh extends SplatGenerator {
           fileName,
           stream,
           streamLength,
+          requestHeader,
+          withCredentials,
           maxSplats,
           construct: constructSplats,
           onProgress,
@@ -500,6 +525,8 @@ export class SplatMesh extends SplatGenerator {
           fileName,
           stream,
           streamLength,
+          requestHeader,
+          withCredentials,
           maxSplats,
           construct,
           onProgress,
@@ -564,6 +591,9 @@ export class SplatMesh extends SplatGenerator {
   // Call this when you are finished with the SplatMesh and want to free
   // any buffers it holds (via packedSplats).
   dispose() {
+    // @ts-ignore Object3D has a dispose method in Three.js >= r186
+    super.dispose?.();
+
     if (
       this.splats &&
       this.splats !== this.packedSplats &&
@@ -951,7 +981,7 @@ export class SplatMesh extends SplatGenerator {
     if (this.editable && !this.edits) {
       // If we haven't set any explicit edits, add any child SplatEdits
       this.traverseVisible((node) => {
-        if (node instanceof SplatEdit) {
+        if (isSplatEdit(node)) {
           edits.push(node);
         }
       });
@@ -964,7 +994,7 @@ export class SplatMesh extends SplatGenerator {
       }
       const sdfs: SplatEditSdf[] = [];
       edit.traverseVisible((node) => {
-        if (node instanceof SplatEditSdf) {
+        if (isSplatEditSdf(node)) {
           sdfs.push(node);
         }
       });
@@ -1046,7 +1076,7 @@ export function maybeLookupIndex(
       showLodPage,
     },
     statements: ({ inputs, outputs }) =>
-      unindentLines(`
+      unindentLines(/* glsl */ `
         int index = ${inputs.index};
         if (${inputs.showLodPage} < 0) {
           if (index >= ${inputs.numSplats}) {
@@ -1086,7 +1116,7 @@ export function maybeInjectSplatRgba(
     outTypes: { gsplat: Gsplat },
     inputs: { gsplat, rgba, index, enableLod },
     statements: ({ inputs, outputs }) =>
-      unindentLines(`
+      unindentLines(/* glsl */ `
         ${outputs.gsplat} = ${inputs.gsplat};
         if (!${inputs.enableLod} && (${inputs.index} >= 0) && (${inputs.index} < ${inputs.rgba}.count)) {
           ${outputs.gsplat}.rgba = texelFetch(${inputs.rgba}.texture, splatTexCoord(${inputs.index}), 0);

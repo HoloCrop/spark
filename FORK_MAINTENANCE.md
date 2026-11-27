@@ -27,6 +27,36 @@ In particular, the workspace applies `build-cuda/patches/py-build-lod.patch`
 on top of its encoder pin. Reconcile that patch explicitly before moving the
 native source pin to the synchronized fork.
 
+## Upstream synchronization (2026-11-28)
+
+The integration brings upstream `f94964a` (Spark 2.4.0) into the fork. It adopts
+the separate `PagedSplats`/fetcher modules, typed worker RPCs and decoded extras,
+chunked SOG decoding, rendering fixes and lifecycle changes. The custom kernel,
+surface picking, semantic textures, worker-built bounds, coherent readback,
+program ownership and trained export remain in place.
+
+The duplicate SH3 fix is replaced by upstream's implementation. Three.js and
+its declarations remain at 0.185 for the Cropvision frontend. CPU texture
+disposal releases image data without invalidating the image object; this also
+resolves the preparation baseline's TypeScript diagnostics.
+
+Semantic metadata now passes through upstream's mutable batch structures and
+both packed and extended native result encodings. Compact splats retain class
+and instance IDs through conversion and LoD merging. The old empty-label batch
+panics, omitted quaternion copy, extended label offset bug, partial SOG label
+decode and cross-class similarity comparison are repaired. Legacy PLY and SOG
+ID conventions remain distinct from trained-array ID+1 encoding.
+
+Each depth snapshot replaces backing storage on its reusable pixel buffer
+handle before GPU writes. A minimal Chromium reproduction showed that writing
+the previous fenced STREAM_READ storage again discarded its accelerated shadow
+copy, even after a complete CPU read. Fresh snapshot storage eliminates that
+warning while preserving one fence and one CPU transfer per snapshot.
+
+Native filesystem/ZIP trained export is isolated behind the `trained_lod`
+feature, enabled by `py-build-lod`; browser builds do not compile that exporter.
+The workspace's separately patched Python wheel and its source pin are unchanged.
+
 ## Changes that must survive
 
 ### Generalized Gaussian rendering
@@ -206,21 +236,15 @@ Delete obsolete worker assets through the normal clean production build.
 - `lefthook.yml.old` disables the upstream hook configuration. It is tooling
   history, not a renderer feature; avoid silently re-enabling formatting hooks
   while synchronizing algorithms.
-- `SplatGetter.has_labels` is never called; `ExtSplatsData.label_info` is always
-  `None`. Neither has a demonstrated consumer in the audited trees. They are
-  candidates to omit when adapting the upstream batch interfaces.
-- Label additions are incomplete outside the deployed extended-paged path:
-  `Csplat` and packed native label getters contain `todo!()`, and the extended
-  native label getters ignore their `base` offset. These are defects, not behavior
-  to preserve; add meaningful round-trip/offset regressions when repairing them.
-- The old copy helper slices empty label buffers and omits `get_quat`. The
-  `GsplatArray` batch receiver also indexes label arrays unconditionally. On fork
-  `main`, `antisplat_roundtrip_basic` and `ksplat_roundtrip_basic` fail because
-  unlabeled batches have empty labels. Preserve labeled and unlabeled decoding
-  contracts when integrating upstream, rather than propagating these defects.
+- `SplatGetter.has_labels` and the always-empty `ExtSplatsData.label_info` had
+  no consumers and are removed during synchronization.
+- The incomplete compact/packed label getters, extended offset bug, empty-label
+  batch panics and omitted quaternion copy are repaired during synchronization.
+  `semantic_transfer.rs` protects conversion across chunks, nonzero batch
+  offsets, RAD semantic groups and SOG labels through the final partial chunk.
 
-This audit identifies these paths by inspection and the existing failures; it
-does not certify the undeployed import/export combinations as working.
+The historical audit above motivated these repairs; neither the old panics nor
+incomplete getters are compatibility requirements.
 
 ## Validation and release
 
@@ -240,7 +264,7 @@ JavaScript tests. In this source-only maintenance change, tests reuse the exact
 published WASM bytes and matching wrapper extracted from the committed bundle
 and source map; no native implementation changed.
 
-The maintenance extraction passes the existing four JS picking, seven readback,
+The preparation extraction passed the existing four JS picking, seven readback,
 six program-ownership, three kernel-moment, and 30 native picking tests.
 No configuration-value tests are needed. The broader native library failures
 above reproduce on unchanged `479781c` and are recorded separately from passing
@@ -250,6 +274,14 @@ and after extraction; the maintenance work adds none. The production and
 development Vite builds emit bundles and declarations, while their declaration
 plugin also reports those existing diagnostics. A successful bundling exit
 code is therefore not a clean type check.
+
+The synchronization is checked with upstream's native workspace, unit and
+Chromium suites, the fork's picking/readback/program-ownership regressions,
+semantic-transfer and kernel-moment tests, source/browser TypeScript checks,
+Biome source lint and workspace Clippy with warnings denied. The additional
+browser regression compares ordinary and quartic Gaussian centers and tails;
+the upstream distant-hit regression is adapted to the fork's surface profile.
+The old native round-trip and TypeScript baseline failures are resolved.
 
 After the upstream merge, also run upstream's unit/browser/native suites and
 check real labeled RAD/SOG scenes: class hiding, instance coloring, fruit hit

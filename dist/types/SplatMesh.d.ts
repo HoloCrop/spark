@@ -1,16 +1,19 @@
-import { ExtSplats } from './ExtSplats';
-import { PackedSplats } from './PackedSplats';
-import { RgbaArray, TRgbaArray } from './RgbaArray';
-import { SplatEdit, SplatEdits } from './SplatEdit';
-import { CovSplatModifier, CovSplatTransformer, FrameUpdateContext, GsplatModifier, SplatGenerator, SplatTransformer } from './SplatGenerator';
-import { PagedSplats, SplatPager } from './SplatPager';
-import { SplatSurfaceIntersection } from './SplatSurfaceRaycast';
-import { SplatSkinning } from './SplatSkinning';
-import { SplatEncoding, SplatFileType } from './defines';
-import { DynoBool, DynoFloat, DynoInt, DynoUsampler2D, DynoVal, DynoVec4, Gsplat } from './dyno';
 import * as THREE from "three";
+import { ExtSplats } from "./ExtSplats";
+import { PackedSplats } from "./PackedSplats";
+import { PagedSplats } from "./PagedSplats";
+import { type RgbaArray, TRgbaArray } from "./RgbaArray";
+import { type SplatEdit, SplatEdits } from "./SplatEdit";
+import { type CovSplatModifier, CovSplatTransformer, type FrameUpdateContext, type GsplatModifier, SplatGenerator, SplatTransformer } from "./SplatGenerator";
+import { SplatPager } from "./SplatPager";
+import { type SplatSurfaceIntersection } from "./SplatSurfaceRaycast";
+import type { SplatSkinning } from "./SplatSkinning";
+import { type SplatEncoding, type SplatFileType } from "./defines";
+import { DynoBool, DynoFloat, DynoInt, DynoUsampler2D, type DynoVal, DynoVec4, Gsplat } from "./dyno";
 export type SplatMeshOptions = {
     url?: string;
+    requestHeader?: Record<string, string>;
+    withCredentials?: boolean;
     fileBytes?: Uint8Array | ArrayBuffer;
     fileType?: SplatFileType;
     fileName?: string;
@@ -36,7 +39,7 @@ export type SplatMeshOptions = {
     worldModifiers?: GsplatModifier[];
     covObjectModifiers?: CovSplatModifier[];
     covWorldModifiers?: CovSplatModifier[];
-    splatEncoding?: SplatEncoding;
+    splatEncoding?: Partial<SplatEncoding>;
     extSplats?: boolean | ExtSplats;
     covSplats?: boolean;
     lod?: boolean | "quality";

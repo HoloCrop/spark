@@ -113,7 +113,7 @@ async function finish(promise: Promise<void>, scheduler: ControlledScheduler) {
   await settled;
 }
 
-test("depth readback transfers one complete layered snapshot after the fence and reuses its buffer", async () => {
+test("depth readback transfers one complete layered snapshot after the fence and reuses its buffer handle", async () => {
   const { scheduler, context, previous, readback } = fixture();
   const firstLayer = new Uint8Array(2 * 1024 * 1024).fill(23);
   const secondLayer = new Uint8Array(2 * 1024 * 1024).fill(71);

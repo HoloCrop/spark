@@ -2,10 +2,10 @@ import type { CovSplatGenerator, GsplatGenerator, SplatGenerator } from "./Splat
 import type { DynoProgram } from "./dyno/program";
 
 export enum SplatProgramMode {
-  Packed,
-  PackedCovariance,
-  Extended,
-  ExtendedCovariance,
+  Packed = 0,
+  PackedCovariance = 1,
+  Extended = 2,
+  ExtendedCovariance = 3,
 }
 
 /** Generation programs owned by one renderer, shared by its accumulator ring. */

@@ -4,8 +4,8 @@ fn profile(depth: f32, alpha: f32, sigma: f32) -> RayProfile {
     RayProfile { depth, alpha, sigma }
 }
 
-fn assert_depth(profiles: &[RayProfile], expected: f32) {
-    let depth = surface_depth(profiles, 0.0, f32::INFINITY).unwrap();
+fn assert_depth(profiles: &[RayProfile], expected: f64) {
+    let depth = f64::from(surface_depth(profiles, 0.0, f32::INFINITY).unwrap());
     assert!((depth - expected).abs() < 2e-6, "{depth} != {expected}");
 }
 

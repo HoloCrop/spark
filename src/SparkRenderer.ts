@@ -1,22 +1,20 @@
 import * as THREE from "three";
-import {
-  ExtSplats,
-  PackedSplats,
-  PagedSplats,
-  Readback,
-  type SplatGenerator,
-  SplatMesh,
-  SplatPager,
-} from ".";
+import { ExtSplats } from "./ExtSplats";
+import { PackedSplats } from "./PackedSplats";
+import { PagedSplats } from "./PagedSplats";
+import { Readback } from "./Readback";
 import { SplatAccumulator } from "./SplatAccumulator";
+import type { SplatGenerator } from "./SplatGenerator";
 import { SplatGeometry } from "./SplatGeometry";
+import { SplatMesh } from "./SplatMesh";
+import { SplatPager } from "./SplatPager";
 import { SplatProgramRegistry } from "./SplatProgramRegistry";
 import { SplatWorker } from "./SplatWorker";
 import { ReadbackCancelledError, SplatDepthReadback } from "./SplatDepthReadback";
 import { SPLAT_TEX_HEIGHT, SPLAT_TEX_WIDTH } from "./defines";
+import { SPARK_ENABLE_HOOKS, sparkHook } from "./hooks";
 import { getShaders } from "./shaders";
 import {
-  cloneClock,
   isAndroid,
   isIos,
   isMobile,
@@ -35,7 +33,9 @@ export interface SparkRendererOptions {
   renderer: THREE.WebGLRenderer;
   /**
    * Callback function to be called when SparkRenderer needs to re-render,
-   * for example when splat sort order or LoD updates complete.
+   * for example when splat sort order or LoD updates complete. May fire
+   * several times per frame; schedule a single render rather than rendering
+   * inside the callback.
    */
   onDirty?: () => void;
   /**
@@ -44,11 +44,10 @@ export interface SparkRendererOptions {
    */
   premultipliedAlpha?: boolean;
   /**
-   * Pass in a THREE.Clock to synchronize time-based effects across different
-   * systems. Alternatively, you can set the property time directly.
-   * (default: new THREE.Clock)
+   * Pass in a THREE.Timer to to synchronize time-based effects across different
+   * systems.
    */
-  clock?: THREE.Clock;
+  timer?: THREE.Timer;
   /**
    * Controls whether to check and automatically update Gsplat collection
    * each frame render.
@@ -234,6 +233,14 @@ export interface SparkRendererOptions {
    */
   numLodFetchers?: number;
   /**
+   * How long (ms) a LoD SplatMesh can go unrendered (hidden or removed from the
+   * scene) before its LoD state is released: the worker-side tree is dropped and,
+   * for paged meshes, its resident pages are freed for other meshes. Rendering it
+   * again rebuilds the tree and refetches pages. Set to Infinity to never release.
+   * @default 3000
+   */
+  lodCleanupTimeoutMs?: number;
+  /**
    * Full-width angle in degrees of fixed foveation cone along the view direction
    * with no foveation applied (full resolution, foveate=1.0). Set to 0 to disable.
    * @default 90.0
@@ -363,10 +370,10 @@ export class SparkRenderer extends THREE.Mesh {
   sortRadial: boolean;
   minSortIntervalMs: number;
 
-  clock: THREE.Clock;
-  time?: number;
+  readonly timer: THREE.Timer;
+  private readonly ownsTimer: boolean;
   lastFrame = -1;
-  updateTimeoutId = -1;
+  updateTimeoutId: ReturnType<typeof setTimeout> | undefined = undefined;
   onDirty?: () => void;
   dirty: boolean;
 
@@ -379,16 +386,22 @@ export class SparkRenderer extends THREE.Mesh {
   accumulators: SplatAccumulator[] = [];
   private readonly programs = new SplatProgramRegistry();
 
+  private isDisposed = false;
+
   sorting = false;
   sortDirty = false;
+  // Mapping version the latest update produced.
+  private latestMappingVersion = -1;
   lastSortTime = 0;
   sortWorker: SplatWorker | null = null;
-  sortTimeoutId = -1;
+  sortTimeoutId: ReturnType<typeof setTimeout> | undefined = undefined;
   sortedCenter = new THREE.Vector3().setScalar(Number.NEGATIVE_INFINITY);
   sortedDir = new THREE.Vector3().setScalar(0);
   readback32 = new Uint32Array(0);
   private depthReadback?: SplatDepthReadback;
-  private disposed = false;
+
+  // Meshes still loading; a render is requested when they finish.
+  private readonly initWatched = new WeakSet<SplatMesh>();
 
   enableLod: boolean;
   enableDriveLod: boolean;
@@ -401,6 +414,7 @@ export class SparkRenderer extends THREE.Mesh {
   pagedExtSplats: boolean;
   maxPagedSplats: number;
   numLodFetchers: number;
+  lodCleanupTimeoutMs: number;
   behindFoveate: number;
   coneFov0: number;
   coneFov: number;
@@ -420,6 +434,7 @@ export class SparkRenderer extends THREE.Mesh {
   lodIdToSplats: Map<number, PackedSplats | ExtSplats | PagedSplats> =
     new Map();
   lodInitQueue: (PackedSplats | ExtSplats | PagedSplats)[] = [];
+  private lodInitFailed = new WeakSet<PackedSplats | ExtSplats | PagedSplats>();
   lastLod?: {
     pos: THREE.Vector3;
     quat: THREE.Quaternion;
@@ -552,6 +567,7 @@ export class SparkRenderer extends THREE.Mesh {
     const defaultPages = isMobile() ? (isIos() ? 96 : 128) : 256;
     this.maxPagedSplats = options.maxPagedSplats ?? defaultPages * 65536;
     this.numLodFetchers = options.numLodFetchers ?? 3;
+    this.lodCleanupTimeoutMs = options.lodCleanupTimeoutMs ?? 3000;
     this.behindFoveate = options.behindFoveate ?? 0.2;
     this.coneFov0 = options.coneFov0 ?? 90.0;
     this.coneFov = options.coneFov ?? 120.0;
@@ -565,7 +581,8 @@ export class SparkRenderer extends THREE.Mesh {
         : options.lodRaycast;
     this.lodRaycastIntervalMs = options.lodRaycastIntervalMs ?? 500;
 
-    this.clock = options.clock ? cloneClock(options.clock) : new THREE.Clock();
+    this.timer = options.timer ?? new THREE.Timer();
+    this.ownsTimer = !!options.timer;
 
     const accumulatorOptions = {
       extSplats: this.accumExtSplats,
@@ -691,10 +708,24 @@ export class SparkRenderer extends THREE.Mesh {
   }
 
   dispose() {
-    this.disposed = true;
+    this.isDisposed = true;
     this.depthReadback?.dispose();
-    clearTimeout(this.sortTimeoutId);
-    clearTimeout(this.updateTimeoutId);
+
+    // @ts-ignore Object3D has a dispose method in Three.js >= r186
+    super.dispose?.();
+
+    if (this.updateTimeoutId !== undefined) {
+      clearTimeout(this.updateTimeoutId);
+      this.updateTimeoutId = undefined;
+    }
+    if (this.sortTimeoutId !== undefined) {
+      clearTimeout(this.sortTimeoutId);
+      this.sortTimeoutId = undefined;
+    }
+
+    this.geometry.dispose();
+    this.material.dispose();
+
     if (this.target) {
       this.target.dispose();
       this.target = undefined;
@@ -719,11 +750,10 @@ export class SparkRenderer extends THREE.Mesh {
     }
     this.programs.dispose();
 
-    const instances = this.lodInstances.values();
-    this.lodInstances.clear();
-    for (const instance of instances) {
+    for (const instance of this.lodInstances.values()) {
       instance.texture.dispose();
     }
+    this.lodInstances.clear();
 
     if (this.sortWorker) {
       this.sortWorker.dispose();
@@ -739,8 +769,15 @@ export class SparkRenderer extends THREE.Mesh {
     }
   }
 
+  // dispose() rejects the work it interrupts.
+  private dropErrorIfDisposed(error: unknown) {
+    if (!this.isDisposed) {
+      throw error;
+    }
+  }
+
   setDirty() {
-    if (!this.dirty) {
+    if (!this.isDisposed && !this.dirty) {
       this.dirty = true;
       this.onDirty?.();
     }
@@ -757,10 +794,46 @@ export class SparkRenderer extends THREE.Mesh {
     const isNewFrame = frame !== spark.lastFrame;
     spark.lastFrame = frame;
 
+    // Trigger update (either sync in case of preUpdate, or async through setTimeout)
+    if (spark.autoUpdate && isNewFrame) {
+      const preUpdate = spark.preUpdate && !renderer.xr.isPresenting;
+      const useCamera = renderer.xr.isPresenting
+        ? renderer.xr.getCamera()
+        : camera;
+      if (preUpdate) {
+        spark
+          .updateInternal({
+            scene,
+            camera: useCamera,
+            autoUpdate: true,
+          })
+          .catch((error) => spark.dropErrorIfDisposed(error));
+      } else {
+        if (spark.updateTimeoutId === undefined) {
+          spark.updateTimeoutId = setTimeout(() => {
+            spark.updateTimeoutId = undefined;
+            spark
+              .updateInternal({
+                scene,
+                camera: useCamera,
+                autoUpdate: true,
+              })
+              .catch((error) => spark.dropErrorIfDisposed(error));
+          }, 1);
+        }
+      }
+    }
+
     // Determine render target
     const currentRenderTarget = renderer.getRenderTarget();
     const isXRRenderTarget = checkIsXRRenderTarget(currentRenderTarget);
-    if (currentRenderTarget) {
+    // Objects like Reflector reset the renderer's current viewport, so prefer
+    // the camera's own viewport.
+    const viewport =
+      camera.viewport ?? renderer.getCurrentViewport(new THREE.Vector4());
+    if (viewport.z > 1 && viewport.w > 1) {
+      spark.renderSize.set(viewport.z, viewport.w);
+    } else if (currentRenderTarget) {
       spark.renderSize.set(
         currentRenderTarget.width,
         currentRenderTarget.height,
@@ -795,7 +868,7 @@ export class SparkRenderer extends THREE.Mesh {
     geometry.instanceCount = spark.activeSplats;
 
     const accumToWorld = new THREE.Matrix4();
-    if (!this.display.extSplats) {
+    if (!spark.display.extSplats) {
       accumToWorld.makeTranslation(spark.display.viewOrigin);
     }
     const cameraToWorld = camera.matrixWorld.clone();
@@ -835,9 +908,9 @@ export class SparkRenderer extends THREE.Mesh {
 
     this.uniforms.ordering.value =
       spark.orderingTexture ?? SparkRenderer.emptyOrdering;
-    this.uniforms.enableExtSplats.value = this.display.extSplats;
-    this.uniforms.enableCovSplats.value = this.display.covSplats;
-    if (this.display.extSplats) {
+    this.uniforms.enableExtSplats.value = spark.display.extSplats;
+    this.uniforms.enableCovSplats.value = spark.display.covSplats;
+    if (spark.display.extSplats) {
       const extSplats = spark.display.getTextures();
       this.uniforms.extSplats.value = extSplats[0];
       this.uniforms.extSplats2.value = extSplats[1];
@@ -851,31 +924,6 @@ export class SparkRenderer extends THREE.Mesh {
     this.uniforms.deltaTime.value = spark.display.deltaTime;
     // Alternating debug flag that can aid in visual debugging
     this.uniforms.debugFlag.value = (performance.now() / 1000.0) % 2.0 < 1.0;
-
-    if (spark.autoUpdate && isNewFrame) {
-      const preUpdate = spark.preUpdate && !renderer.xr.isPresenting;
-      const useCamera = renderer.xr.isPresenting
-        ? renderer.xr.getCamera()
-        : camera;
-      if (preUpdate) {
-        spark.updateInternal({
-          scene,
-          camera: useCamera,
-          autoUpdate: true,
-        });
-      } else {
-        if (spark.updateTimeoutId === -1) {
-          spark.updateTimeoutId = setTimeout(() => {
-            spark.updateTimeoutId = -1;
-            spark.updateInternal({
-              scene,
-              camera: useCamera,
-              autoUpdate: true,
-            });
-          }, 1);
-        }
-      }
-    }
 
     spark.dirty = false;
   }
@@ -930,8 +978,13 @@ export class SparkRenderer extends THREE.Mesh {
     camera: THREE.Camera;
     autoUpdate: boolean;
   }) {
+    if (this.isDisposed) {
+      return;
+    }
     const renderer = this.renderer;
-    const time = this.time ?? this.clock.getElapsedTime();
+    if (this.ownsTimer) {
+      this.timer.update();
+    }
 
     const center = camera.getWorldPosition(new THREE.Vector3());
     const dir = camera.getWorldDirection(new THREE.Vector3());
@@ -955,7 +1008,7 @@ export class SparkRenderer extends THREE.Mesh {
       next.prepareGenerate({
         renderer,
         scene,
-        time,
+        timer: this.timer,
         camera,
         sortRadial: this.sortRadial ?? true,
         renderSize: this.renderSize,
@@ -963,9 +1016,30 @@ export class SparkRenderer extends THREE.Mesh {
         lodInstances: this.enableLod ? this.lodInstances : undefined,
       });
 
+    // Meshes still loading contribute nothing this frame; request a render
+    // when they finish so on-demand apps show them without other input.
+    // Listen for the event rather than mesh.initialized: attaching to that
+    // promise would mark a load failure as handled and silence its report.
+    for (const generator of visibleGenerators) {
+      if (
+        generator instanceof SplatMesh &&
+        !generator.isInitialized &&
+        !this.initWatched.has(generator)
+      ) {
+        this.initWatched.add(generator);
+        const onInitialized = () => {
+          generator.removeEventListener("initialized", onInitialized);
+          this.initWatched.delete(generator);
+          this.setDirty();
+        };
+        generator.addEventListener("initialized", onInitialized);
+      }
+    }
+
     let doUpdate = true;
     const needsUpdate = viewChanged || version !== this.current.version;
     const mappingUpdated = mappingVersion !== this.display.mappingVersion;
+    this.latestMappingVersion = mappingVersion;
 
     if (autoUpdate && !needsUpdate) {
       // Triggered by auto-update but no change
@@ -1013,13 +1087,19 @@ export class SparkRenderer extends THREE.Mesh {
   }
 
   private async driveSort() {
-    if (this.disposed || this.sorting || !this.sortDirty) {
+    if (
+      this.isDisposed ||
+      this.sorting ||
+      !this.sortDirty ||
+      this.latestMappingVersion !== this.current.mappingVersion ||
+      this.current.mappingChanged()
+    ) {
       return;
     }
 
-    if (this.sortTimeoutId !== -1) {
+    if (this.sortTimeoutId !== undefined) {
       clearTimeout(this.sortTimeoutId);
-      this.sortTimeoutId = -1;
+      this.sortTimeoutId = undefined;
     }
 
     const now = performance.now();
@@ -1028,8 +1108,8 @@ export class SparkRenderer extends THREE.Mesh {
       : now;
     if (now < nextSortTime) {
       this.sortTimeoutId = setTimeout(() => {
-        this.sortTimeoutId = -1;
-        this.driveSort();
+        this.sortTimeoutId = undefined;
+        this.driveSort().catch((error) => this.dropErrorIfDisposed(error));
       }, nextSortTime - now);
       return;
     }
@@ -1045,13 +1125,13 @@ export class SparkRenderer extends THREE.Mesh {
         this.sortDirty = true;
         return;
       }
-      if (!this.disposed) throw error;
+      if (!this.isDisposed) throw error;
     } finally {
       this.sorting = false;
     }
-    if (!this.disposed) {
+    if (!this.isDisposed) {
       this.setDirty();
-      this.driveSort();
+      this.driveSort().catch((error) => this.dropErrorIfDisposed(error));
     }
   }
 
@@ -1059,21 +1139,23 @@ export class SparkRenderer extends THREE.Mesh {
     if (this.readPause > 0) {
       await new Promise((resolve) => setTimeout(resolve, this.readPause));
     }
-    if (this.disposed) return;
+    if (this.isDisposed) {
+      return;
+    }
 
     const current = this.current;
 
     this.sortedCenter.copy(current.viewOrigin);
     this.sortedDir.copy(current.viewDirection);
 
-    // Accumulator objects are recycled while this asynchronous job is in flight.
-    const { numSplats, maxSplats, mappingVersion } = current;
-    const rows = Math.max(1, Math.ceil(maxSplats / 16384));
+    // Accumulators may be recycled while this asynchronous job is in flight.
+    const { numSplats, mappingVersion } = current;
+    const rows = Math.max(1, Math.ceil(numSplats / 16384));
     const orderingMaxSplats = rows * 16384;
     this.maxSplats = Math.max(this.maxSplats, orderingMaxSplats);
 
-    const ordering = new Uint32Array(this.maxSplats);
-    const readback = Readback.ensureBuffer(maxSplats, this.readback32);
+    const ordering = new Uint32Array(orderingMaxSplats);
+    const readback = Readback.ensureBuffer(orderingMaxSplats, this.readback32);
     this.readback32 = readback;
 
     await this.readbackDepth({
@@ -1086,25 +1168,24 @@ export class SparkRenderer extends THREE.Mesh {
     if (this.sortPause > 0) {
       await new Promise((resolve) => setTimeout(resolve, this.sortPause));
     }
-    if (this.disposed) return;
-
+    if (this.isDisposed) {
+      return;
+    }
     if (!this.sortWorker) {
       this.sortWorker = new SplatWorker();
     }
-    const result = (await this.sortWorker.call("sortSplats32", {
+    const result = await this.sortWorker.call("sortSplats32", {
       numSplats,
       readback,
       ordering,
-    })) as {
-      readback: Uint32Array<ArrayBuffer>;
-      ordering: Uint32Array;
-      activeSplats: number;
-    };
+    });
 
     if (this.sortDelay > 0) {
       await new Promise((resolve) => setTimeout(resolve, this.sortDelay));
     }
-    if (this.disposed) return;
+    if (this.isDisposed) {
+      return;
+    }
 
     this.readback32 = result.readback;
 
@@ -1189,7 +1270,8 @@ export class SparkRenderer extends THREE.Mesh {
 
     let pixelScaleLimit = 0.0;
     if (camera instanceof THREE.PerspectiveCamera) {
-      const tanYfov = Math.tan((0.5 * camera.fov * Math.PI) / 180);
+      // three.js leaves fov at its default on the WebXR camera
+      const tanYfov = 1.0 / camera.projectionMatrix.elements[5];
       pixelScaleLimit = (2.0 * tanYfov) / this.renderSize.y;
     } else if (camera instanceof THREE.OrthographicCamera) {
       // Effective visible size after zoom
@@ -1215,9 +1297,12 @@ export class SparkRenderer extends THREE.Mesh {
     }
 
     if (this.lastLod) {
+      if (this.lastLod.maxSplats !== maxSplats) {
+        this.lodDirty = true;
+      }
       if (
-        this.lastLod.pixelScaleLimit !== pixelScaleLimit ||
-        this.lastLod.maxSplats !== maxSplats
+        Math.abs(this.lastLod.pixelScaleLimit - pixelScaleLimit) >
+        1e-5 * pixelScaleLimit
       ) {
         this.lodDirty = true;
       }
@@ -1235,11 +1320,13 @@ export class SparkRenderer extends THREE.Mesh {
     const lodMeshes = !this.enableLod
       ? []
       : (visibleGenerators.filter((generator) => {
+          if (!(generator instanceof SplatMesh)) {
+            return false;
+          }
+          const lodSplats =
+            generator.packedSplats?.lodSplats ?? generator.extSplats?.lodSplats;
           return (
-            generator instanceof SplatMesh &&
-            (generator.packedSplats?.lodSplats ||
-              generator.extSplats?.lodSplats ||
-              generator.paged) &&
+            ((lodSplats && lodSplats.numSplats > 0) || generator.paged) &&
             generator.enableLod !== false
           );
         }) as SplatMesh[]);
@@ -1278,110 +1365,174 @@ export class SparkRenderer extends THREE.Mesh {
         const record = this.lodIds.get(splats);
         if (record) {
           record.lastTouched = now;
-        } else {
+        } else if (!this.lodInitFailed.has(splats)) {
           this.lodInitQueue.push(splats);
         }
       }
     }
 
     this.ensureLodWorker().tryExclusive(async (worker) => {
-      if (hasPaged && !this.pager) {
-        this.pager = new SplatPager({
-          renderer: this.renderer,
-          extSplats: this.pagedExtSplats,
-          maxSplats: this.maxPagedSplats,
-          numFetchers: this.numLodFetchers,
-        });
-
-        const { lodId } = (await worker.call("newLodTree", {
-          capacity: this.pager.maxSplats,
-        })) as { lodId: number };
-        this.pagerId = lodId;
-      }
-
-      // Assign pager to any new meshes that don't have one yet
-      // (must run every frame, not just when pager is first created)
-      if (this.pager) {
-        for (const { mesh } of this.lodMeshes) {
-          if (mesh.paged && !mesh.paged.pager) {
-            mesh.paged.pager = this.pager;
-          }
-        }
-      }
-
-      if (this.lodInitQueue.length > 0) {
-        const lodInitQueue = this.lodInitQueue;
-        this.lodInitQueue = [];
-        while (lodInitQueue.length > 0) {
-          const splats = lodInitQueue.shift();
-          if (splats) {
-            await this.initLodTree(worker, splats);
-            this.lodDirty = true;
-          }
-        }
-      }
-
-      if (this.pager) {
-        const updates = this.pager.consumeLodTreeUpdates();
-
-        for (const { splats, page, chunk, numSplats, lodTree } of updates) {
-          const record = this.lodIds.get(splats);
-          if (record) {
-            if (lodTree && chunk === 0) {
-              record.rootPage = page;
-            }
-            this.lodUpdates.push({
-              lodId: record.lodId,
-              pageBase: page * this.pager.pageSplats,
-              chunkBase: chunk * this.pager.pageSplats,
-              count: numSplats,
-              lodTreeData: lodTree,
-            });
-          }
-        }
-      }
-
-      if (this.lodUpdates.length > 0) {
-        const lodUpdates = this.lodUpdates;
-        this.lodUpdates = [];
-        await worker.call("updateLodTrees", { ranges: lodUpdates });
-        this.lodDirty = true;
-      }
-
-      if (this.lodDirty) {
-        const now = performance.now();
-        const deltaPred = new THREE.Vector3();
-        if (this.lastLod) {
-          const deltaTime = Math.max(1, now - this.lastLod.timestamp);
-          deltaPred
-            .copy(viewPos)
-            .sub(this.lastLod.pos)
-            .multiplyScalar(this.lastTraverseTime / deltaTime);
-        }
-        this.lastLod = {
-          pos: viewPos,
-          quat: viewQuat,
-          pixelScaleLimit,
-          maxSplats,
-          timestamp: now,
-        };
-        this.lodDirty = false;
-
-        await this.updateLodInstances(
-          worker,
-          deltaPred,
+      try {
+        await this.driveLodExclusive(worker, {
+          hasPaged,
           lodMeshes,
-          maxSplats,
           viewPos,
           viewQuat,
           pixelScaleLimit,
-        );
-        this.currentLod = this.lastLod;
-        this.setDirty();
+          maxSplats,
+        });
+      } catch (error) {
+        this.dropErrorIfDisposed(error);
+      } finally {
+        // driveLod() skips tryExclusive while this runs, so work it flagged
+        // (lodDirty, lodInitQueue) would otherwise wait for an unrelated render.
+        // Likewise chunk data that landed after consumeLodTreeUpdates: its
+        // onUpdate render already happened and found the worker busy.
+        if (
+          this.lodDirty ||
+          this.lodInitQueue.length > 0 ||
+          this.pager?.hasQueued()
+        ) {
+          this.setDirty();
+        }
       }
-
-      await this.cleanupLodTrees(worker);
     });
+  }
+
+  /** Body of the LoD update, run with exclusive access to the LoD worker. */
+  private async driveLodExclusive(
+    worker: SplatWorker,
+    {
+      hasPaged,
+      lodMeshes,
+      viewPos,
+      viewQuat,
+      pixelScaleLimit,
+      maxSplats,
+    }: {
+      hasPaged: boolean;
+      lodMeshes: SplatMesh[];
+      viewPos: THREE.Vector3;
+      viewQuat: THREE.Quaternion;
+      pixelScaleLimit: number;
+      maxSplats: number;
+    },
+  ) {
+    if (hasPaged && !this.pager) {
+      this.pager = new SplatPager({
+        renderer: this.renderer,
+        extSplats: this.pagedExtSplats,
+        maxSplats: this.maxPagedSplats,
+        numFetchers: this.numLodFetchers,
+        onUpdate: () => this.setDirty(),
+      });
+
+      const { lodId } = await worker.call("newLodTree", {
+        capacity: this.pager.maxSplats,
+      });
+      this.pagerId = lodId;
+    }
+
+    // Assign pager to any new meshes that don't have one yet
+    // (must run every frame, not just when pager is first created)
+    if (this.pager) {
+      for (const { mesh } of this.lodMeshes) {
+        if (mesh.paged && !mesh.paged.pager) {
+          mesh.paged.pager = this.pager;
+        }
+      }
+    }
+
+    if (this.lodInitQueue.length > 0) {
+      const lodInitQueue = this.lodInitQueue;
+      this.lodInitQueue = [];
+      while (lodInitQueue.length > 0) {
+        const splats = lodInitQueue.shift();
+        if (splats) {
+          try {
+            await this.initLodTree(worker, splats);
+            this.lodDirty = true;
+          } catch (error) {
+            if (this.isDisposed) {
+              return;
+            }
+            this.lodInitFailed.add(splats);
+            console.error("initLodTree error", error);
+          }
+        }
+      }
+    }
+
+    if (this.pager) {
+      const updates = this.pager.consumeLodTreeUpdates();
+
+      for (const { splats, page, chunk, numSplats, lodTree } of updates) {
+        const record = this.lodIds.get(splats);
+        if (record) {
+          if (lodTree && chunk === 0) {
+            record.rootPage = page;
+          } else if (!lodTree && chunk === 0 && record.rootPage === page) {
+            // Root chunk evicted: forget the page (traversal skips this mesh
+            // until the root is refetched) and stop drawing indices into
+            // pages that no longer hold this mesh's data.
+            record.rootPage = undefined;
+            splats.clear();
+          }
+          this.lodUpdates.push({
+            lodId: record.lodId,
+            pageBase: page * this.pager.pageSplats,
+            chunkBase: chunk * this.pager.pageSplats,
+            count: numSplats,
+            lodTreeData: lodTree,
+          });
+        }
+      }
+    }
+
+    if (this.lodUpdates.length > 0) {
+      const lodUpdates = this.lodUpdates;
+      this.lodUpdates = [];
+      await worker.call("updateLodTrees", { ranges: lodUpdates });
+      this.lodDirty = true;
+    }
+
+    if (this.lodDirty) {
+      const now = performance.now();
+      const deltaPred = new THREE.Vector3();
+      if (this.lastLod) {
+        const deltaTime = Math.max(1, now - this.lastLod.timestamp);
+        deltaPred
+          .copy(viewPos)
+          .sub(this.lastLod.pos)
+          .multiplyScalar(this.lastTraverseTime / deltaTime);
+      }
+      this.lastLod = {
+        pos: viewPos,
+        quat: viewQuat,
+        pixelScaleLimit,
+        maxSplats,
+        timestamp: now,
+      };
+      this.lodDirty = false;
+
+      await this.updateLodInstances(
+        worker,
+        deltaPred,
+        lodMeshes,
+        maxSplats,
+        viewPos,
+        viewQuat,
+        pixelScaleLimit,
+      );
+      this.currentLod = this.lastLod;
+      this.setDirty();
+    }
+
+    if (SPARK_ENABLE_HOOKS) {
+      const p = sparkHook("lod.beforeCleanup", { spark: this });
+      if (p) await p;
+    }
+    await this.cleanupLodTrees(worker);
   }
 
   private async initLodTree(
@@ -1389,17 +1540,17 @@ export class SparkRenderer extends THREE.Mesh {
     splats: PackedSplats | ExtSplats | PagedSplats,
   ) {
     if (splats instanceof PackedSplats || splats instanceof ExtSplats) {
-      const { lodId } = (await worker.call("initLodTree", {
+      const { lodId } = await worker.call("initLodTree", {
         numSplats: splats.numSplats ?? 0,
         lodTree: (splats.extra.lodTree as Uint32Array).slice(),
-      })) as { lodId: number };
+      });
       this.lodIds.set(splats, { lodId, lastTouched: performance.now() });
       this.lodIdToSplats.set(lodId, splats);
       // console.log("*** initLodTree", lodId, splats.extra.lodTree, splats);
     } else {
-      const { lodId } = (await worker.call("newSharedLodTree", {
+      const { lodId } = await worker.call("newSharedLodTree", {
         lodId: this.pagerId,
-      })) as { lodId: number };
+      });
       this.lodIds.set(splats, { lodId, lastTouched: performance.now() });
       this.lodIdToSplats.set(lodId, splats);
       // console.log("*** newSharedLodTree", lodId, this.pagerId, splats);
@@ -1481,20 +1632,13 @@ export class SparkRenderer extends THREE.Mesh {
     );
 
     const traverseStart = performance.now();
-    const result = (await worker.call("traverseLodTrees", {
+    const result = await worker.call("traverseLodTrees", {
       maxSplats,
       pixelScaleLimit,
       lastPixelLimit: this.lastPixelLimit,
       instances,
       traverseMode: this.lodTraverseMode,
-    })) as {
-      keyIndices: Record<
-        string,
-        { lodId: number; numSplats: number; indices: Uint32Array }
-      >;
-      chunks: [number, number][];
-      pixelLimit?: number;
-    };
+    });
     this.lastTraverseTime = performance.now() - traverseStart;
 
     const { keyIndices, chunks, pixelLimit } = result;
@@ -1561,16 +1705,12 @@ export class SparkRenderer extends THREE.Mesh {
     ) {
       this.lastLodRaycastTime = performance.now();
       const traverseStart = performance.now();
-      const result = (await worker.call("traverseLodTrees", {
+      const result = await worker.call("traverseLodTrees", {
         maxSplats: Math.min(this.lodRaycast, Math.round(totalLodSplats * 0.1)),
         pixelScaleLimit,
         instances,
-      })) as {
-        keyIndices: Record<
-          string,
-          { lodId: number; numSplats: number; indices: Uint32Array }
-        >;
-      };
+        traverseMode: this.lodTraverseMode,
+      });
       const raycastTraverseTime = performance.now() - traverseStart;
 
       const { keyIndices } = result;
@@ -1588,39 +1728,49 @@ export class SparkRenderer extends THREE.Mesh {
   }
 
   private async cleanupLodTrees(worker: SplatWorker) {
-    const DISPOSE_TIMEOUT_MS = 3000;
+    // Release every expired tree. Meshes in the current render set are never
+    // candidates, regardless of lastTouched (which is stamped in the prelude,
+    // before `now` below), so a timeout of 0 means "as soon as the mesh stops
+    // being rendered".
+    const rendered = new Set(
+      this.lodMeshes.map(
+        ({ mesh }) =>
+          mesh.packedSplats?.lodSplats ??
+          mesh.extSplats?.lodSplats ??
+          mesh.paged,
+      ),
+    );
     const now = performance.now();
-
-    let oldest = null;
+    const expired = [];
     for (const [splats, record] of this.lodIds.entries()) {
-      if (oldest == null || record.lastTouched < oldest.lastTouched) {
-        oldest = {
-          splats,
-          lastTouched: record.lastTouched,
-          lodId: record.lodId,
-        };
-      }
-    }
-    if (!oldest || oldest.lastTouched > now - DISPOSE_TIMEOUT_MS) {
-      return;
-    }
-
-    this.lodIds.delete(oldest.splats);
-    this.lodIdToSplats.delete(oldest.lodId);
-
-    for (const [mesh, instance] of this.lodInstances.entries()) {
-      if (instance.lodId === oldest.lodId) {
-        instance.texture.dispose();
-        this.lodInstances.delete(mesh);
+      if (rendered.has(splats)) continue;
+      if (record.lastTouched <= now - this.lodCleanupTimeoutMs) {
+        expired.push({ splats, lodId: record.lodId });
       }
     }
 
-    if (oldest.splats instanceof PagedSplats) {
-      this.pager?.removeSplats(oldest.splats);
+    // All bookkeeping happens synchronously, before any await: driveLod() may
+    // run between awaits and must see a consistent lodIds. Only the worker
+    // disposals, which nothing references anymore, are awaited afterwards.
+    for (const { splats, lodId } of expired) {
+      this.lodIds.delete(splats);
+      this.lodIdToSplats.delete(lodId);
+
+      for (const [mesh, instance] of this.lodInstances.entries()) {
+        if (instance.lodId === lodId) {
+          instance.texture.dispose();
+          this.lodInstances.delete(mesh);
+        }
+      }
+
+      if (splats instanceof PagedSplats) {
+        this.pager?.removeSplats(splats);
+      }
     }
 
-    await worker.call("disposeLodTree", { lodId: oldest.lodId });
-    // console.log("disposed lodTree", oldest.lodId);
+    for (const { lodId } of expired) {
+      await worker.call("disposeLodTree", { lodId });
+    }
   }
 
   private updateLodIndices(
@@ -1669,31 +1819,14 @@ export class SparkRenderer extends THREE.Mesh {
           // instance.indices.set(indices.subarray(0, numSplats));
 
           const renderer = this.renderer;
-          const gl = renderer.getContext() as WebGL2RenderingContext;
           if (renderer.properties.has(instance.texture)) {
-            const props = renderer.properties.get(instance.texture) as {
-              __webglTexture: WebGLTexture;
-            };
-            const glTexture = props.__webglTexture;
-            if (!glTexture) {
-              throw new Error("lodIndices texture not found");
-            }
-            renderer.state.activeTexture(gl.TEXTURE0);
-            renderer.state.bindTexture(gl.TEXTURE_2D, glTexture);
-            gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null);
-            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-            gl.texSubImage2D(
-              gl.TEXTURE_2D,
-              0,
-              0,
-              0,
+            uploadU32DataTextureRows(
+              renderer,
+              instance.texture,
               4096,
               rows,
-              gl.RGBA_INTEGER,
-              gl.UNSIGNED_INT,
               indices,
             );
-            renderer.state.bindTexture(gl.TEXTURE_2D, null);
           }
         }
       }
@@ -1988,11 +2121,11 @@ export class SparkRenderer extends THREE.Mesh {
     }
 
     const textures = SparkRenderer.cubeRender.target.texture;
+    const { width, height } = SparkRenderer.cubeRender.target;
     const promises = [];
     const buffers = [];
 
     for (let i = 0; i < textures.images.length; ++i) {
-      const { width, height } = textures.images[i];
       const byteSize = width * height * 4;
       const readback = new Uint8Array(byteSize);
       buffers.push(readback);
@@ -2083,10 +2216,10 @@ export class SparkRenderer extends THREE.Mesh {
     }
 
     const result = await this.ensureLodWorker().exclusive(async (worker) => {
-      return (await worker.call("getLodTreeLevel", {
+      return await worker.call("getLodTreeLevel", {
         lodId: instance.lodId,
         level,
-      })) as { indices: Uint32Array };
+      });
     });
 
     if (splats.packedSplats?.lodSplats) {
@@ -2120,6 +2253,8 @@ export class SparkRenderer extends THREE.Mesh {
   }
 }
 
+// Three.js sets this property on the ordinary THREE.WebGLRenderTarget it
+// creates for an XR session, so instanceof cannot identify it.
 function checkIsXRRenderTarget(renderTarget: THREE.RenderTarget | null) {
   return (renderTarget as unknown as Record<string, boolean>)?.isXRRenderTarget;
 }

@@ -1,8 +1,10 @@
 use std::array;
 
 use js_sys::{Object, Reflect, Uint32Array};
+#[cfg(feature = "gsplat")]
+use spark_lib::gsplat::GsplatArray;
 use spark_lib::{
-    csplat::CsplatArray, decoder::{SetSplatEncoding, SplatEncoding, SplatGetter, SplatInit, SplatProps, SplatPropsMut, SplatReceiver, copy_getter_to_receiver}, gsplat::GsplatArray, splat_encode::{
+    csplat::CsplatArray, decoder::{SetSplatEncoding, SplatEncoding, SplatGetter, SplatInit, SplatProps, SplatPropsMut, SplatReceiver, copy_getter_to_receiver}, splat_encode::{
         decode_packed_splat_center, decode_packed_splat_opacity, decode_packed_splat_quat, decode_packed_splat_rgb, decode_packed_splat_scale, decode_sh1_internal_words, decode_sh2_internal_words, decode_sh3_internal_words, encode_lod_tree, encode_packed_splat, encode_packed_splat_center, encode_packed_splat_opacity, encode_packed_splat_quat, encode_packed_splat_rgb, encode_packed_splat_rgba, encode_packed_splat_scale, encode_sh1_array, encode_sh2_array, encode_sh3_array, get_decode_sh1_scale, get_decode_sh2_scale, get_decode_sh3_scale, get_splat_tex_size
     }, tsplat::{Tsplat, TsplatArray}
 };
@@ -13,6 +15,8 @@ pub struct PackedSplatsData {
     pub num_splats: usize,
     pub max_sh_degree: usize,
     pub packed: Uint32Array,
+    pub labels: Option<Uint32Array>,
+    pub instances: Option<Uint32Array>,
     pub sh1: Option<Uint32Array>,
     pub sh2: Option<Uint32Array>,
     pub sh3: Option<Uint32Array>,
@@ -39,6 +43,8 @@ impl PackedSplatsData {
             num_splats: 0,
             max_sh_degree: 0,
             packed: Uint32Array::new_with_length(0),
+            labels: None,
+            instances: None,
             sh1: None,
             sh2: None,
             sh3: None,
@@ -65,6 +71,12 @@ impl PackedSplatsData {
         Reflect::set(&object, &JsValue::from_str("numSplats"), &JsValue::from(self.num_splats as u32)).unwrap();
         Reflect::set(&object, &JsValue::from_str("maxShDegree"), &JsValue::from(self.max_sh_degree as u32)).unwrap();
         Reflect::set(&object, &JsValue::from_str("packed"), &self.packed).unwrap();
+        if let Some(labels) = self.labels.as_ref() {
+            Reflect::set(&object, &JsValue::from_str("labels"), labels).unwrap();
+        }
+        if let Some(instances) = self.instances.as_ref() {
+            Reflect::set(&object, &JsValue::from_str("instances"), instances).unwrap();
+        }
         if let Some(sh1) = self.sh1.as_ref() {
             Reflect::set(&object, &JsValue::from_str("sh1"), &JsValue::from(sh1)).unwrap();
         }
@@ -97,6 +109,13 @@ impl PackedSplatsData {
         data.packed = packed;
 
         if let Some(extra) = extra {
+            if let Ok(labels) = Reflect::get(extra, &JsValue::from_str("labels")) {
+                if !labels.is_falsy() { data.labels = Some(Uint32Array::from(labels)); }
+            }
+            if let Ok(instances) = Reflect::get(extra, &JsValue::from_str("instances")) {
+                if !instances.is_falsy() { data.instances = Some(Uint32Array::from(instances)); }
+            }
+
             if let Ok(sh1) = Reflect::get(extra, &JsValue::from_str("sh1")) {
                 if !sh1.is_falsy() {
                     data.sh1 = Some(Uint32Array::from(sh1));
@@ -159,6 +178,7 @@ impl PackedSplatsData {
         }
     }
 
+    #[cfg(feature = "gsplat")]
     pub fn to_gsplat_array(&mut self) -> anyhow::Result<GsplatArray> {
         let mut out = GsplatArray::new();
         copy_getter_to_receiver(self, &mut out)?;
@@ -200,6 +220,8 @@ impl PackedSplatsData {
         {
             let mut batch_center = vec![0.0; 3 * MAX_SPLAT_CHUNK];
             let mut batch_opacity = vec![0.0; MAX_SPLAT_CHUNK];
+            let mut batch_labels = vec![0; MAX_SPLAT_CHUNK];
+            let mut batch_instances = vec![0; MAX_SPLAT_CHUNK];
             let mut batch_rgb = vec![0.0; 3 * MAX_SPLAT_CHUNK];
             let mut batch_scale = vec![0.0; 3 * MAX_SPLAT_CHUNK];
             let mut batch_quat = vec![0.0; 4 * MAX_SPLAT_CHUNK];
@@ -216,16 +238,14 @@ impl PackedSplatsData {
                     let scales = splat.scales();
                     let quat = splat.quaternion().to_array();
 
-                    for d in 0..3 {
-                        batch_center[i3 + d] = center[d];
-                        batch_rgb[i3 + d] = rgb[d];
-                        batch_scale[i3 + d] = scales[d];
-                    }
-                    for d in 0..4 {
-                        batch_quat[i4 + d] = quat[d];
-                    }
+                    batch_center[i3..(i3 + 3)].copy_from_slice(&center.to_array());
+                    batch_rgb[i3..(i3 + 3)].copy_from_slice(&rgb.to_array());
+                    batch_scale[i3..(i3 + 3)].copy_from_slice(&scales.to_array());
+                    batch_quat[i4..(i4 + 4)].copy_from_slice(&quat);
 
                     batch_opacity[i] = splat.opacity();
+                    batch_labels[i] = splat.label();
+                    batch_instances[i] = splat.instance_label();
 
                     if lod_tree {
                         let (count, start) = splats.get_child_count_start(base + i);
@@ -241,6 +261,8 @@ impl PackedSplatsData {
                 receiver.set_batch(base, count, &SplatProps {
                     center: &batch_center,
                     opacity: &batch_opacity,
+                    labels: &batch_labels,
+                    instances: &batch_instances,
                     rgb: &batch_rgb,
                     scale: &batch_scale,
                     quat: &batch_quat,
@@ -260,9 +282,7 @@ impl PackedSplatsData {
                 for i in 0..count {
                     let i9 = i * 9;
                     let values = splats.get_sh1(base + i);
-                    for d in 0..9 {
-                        batch[i9 + d] = values[d];
-                    }
+                    batch[i9..(i9 + 9)].copy_from_slice(&values);
                 }
                 receiver.set_sh1(base, count, &batch);
                 base += count;
@@ -277,9 +297,7 @@ impl PackedSplatsData {
                 for i in 0..count {
                     let i15 = i * 15;
                     let values = splats.get_sh2(base + i);
-                    for d in 0..15 {
-                        batch[i15 + d] = values[d];
-                    }
+                    batch[i15..(i15 + 15)].copy_from_slice(&values);
                 }
                 receiver.set_sh2(base, count, &batch);
                 base += count;
@@ -294,9 +312,7 @@ impl PackedSplatsData {
                 for i in 0..count {
                     let i21 = i * 21;
                     let values = splats.get_sh3(base + i);
-                    for d in 0..21 {
-                        batch[i21 + d] = values[d];
-                    }
+                    batch[i21..(i21 + 21)].copy_from_slice(&values);
                 }
                 receiver.set_sh3(base, count, &batch);
                 base += count;
@@ -343,6 +359,8 @@ impl SplatReceiver for PackedSplatsData {
 
         self.packed = Uint32Array::new_with_length((max_splats * 4) as u32);
 
+        self.labels = Some(Uint32Array::new_with_length(max_splats as u32));
+        self.instances = Some(Uint32Array::new_with_length(max_splats as u32));
         self.sh1 = if init.max_sh_degree < 1 { None } else {
             Some(Uint32Array::new_with_length((max_splats * 2) as u32))
         };
@@ -478,6 +496,8 @@ impl SplatReceiver for PackedSplatsData {
         }
         self.buffer_dirty = true;
 
+        if !batch.labels.is_empty() { self.set_label(base, count, batch.labels); }
+        if !batch.instances.is_empty() { self.set_instance_label(base, count, batch.instances); }
         self.set_sh(base, count, batch.sh1, batch.sh2, batch.sh3);
 
         if !batch.child_count.is_empty() {
@@ -708,13 +728,11 @@ impl SplatReceiver for PackedSplatsData {
                     let label = sh_labels[i] as usize;
                     let i4 = i * 4;
                     let l4 = label * 4;
-                    for k in 0..4 {
-                        buffer[i4 + k] = self.sh2_codes[l4 + k];
-                    }
+                    buffer[i4..i4 + 4].copy_from_slice(&self.sh2_codes[l4..l4 + 4]);
                 }
 
                 packed_sh2.subarray((base * 4) as u32, ((base + count) * 4) as u32).copy_from(buffer);
-                
+
                 if self.max_sh_degree == 2 {
                     return;
                 }
@@ -725,9 +743,7 @@ impl SplatReceiver for PackedSplatsData {
                         let label = sh_labels[i] as usize;
                         let i4 = i * 4;
                         let l4 = label * 4;
-                        for k in 0..4 {
-                            buffer[i4 + k] = self.sh3_codes[l4 + k];
-                        }
+                        buffer[i4..i4 + 4].copy_from_slice(&self.sh3_codes[l4..l4 + 4]);
                     }
                     packed_sh3.subarray((base * 4) as u32, ((base + count) * 4) as u32).copy_from(buffer);
                 }
@@ -737,14 +753,20 @@ impl SplatReceiver for PackedSplatsData {
 
 
 
+    fn set_label(&mut self, base: usize, count: usize, values: &[u32]) {
+        self.labels.as_ref().unwrap().subarray(base as u32, (base + count) as u32).copy_from(&values[..count]);
+    }
+
+    fn set_instance_label(&mut self, base: usize, count: usize, values: &[u32]) {
+        self.instances.as_ref().unwrap().subarray(base as u32, (base + count) as u32).copy_from(&values[..count]);
+    }
+
     fn set_child_count(&mut self, base: usize, count: usize, child_count: &[u16]) {
         if self.child_counts.is_none() {
             self.child_counts = Some(vec![0; self.num_splats]);
         }
         let counts = self.child_counts.as_mut().unwrap();
-        for i in 0..count {
-            counts[base + i] = child_count[i];
-        }
+        counts[base..base + count].copy_from_slice(&child_count[..count]);
     }
 
     fn set_child_start(&mut self, base: usize, count: usize, child_start: &[usize]) {
@@ -774,9 +796,7 @@ impl SplatGetter for PackedSplatsData {
             let elements = &self.buffer[i4..i4 + 4];
             if !out.center.is_empty() {
                 let center = decode_packed_splat_center(elements);
-                for d in 0..3 {
-                    out.center[i3 + d] = center[d];
-                }
+                out.center[i3..i3 + 3].copy_from_slice(&center);
             }
             if !out.opacity.is_empty() {
                 let opacity = decode_packed_splat_opacity(elements, &self.encoding);
@@ -784,24 +804,20 @@ impl SplatGetter for PackedSplatsData {
             }
             if !out.rgb.is_empty() {
                 let rgb = decode_packed_splat_rgb(elements, &self.encoding);
-                for d in 0..3 {
-                    out.rgb[i3 + d] = rgb[d];
-                }
+                out.rgb[i3..i3 + 3].copy_from_slice(&rgb);
             }
             if !out.scale.is_empty() {
                 let scale = decode_packed_splat_scale(elements, &self.encoding);
-                for d in 0..3 {
-                    out.scale[i3 + d] = scale[d];
-                }
+                out.scale[i3..i3 + 3].copy_from_slice(&scale);
             }
             if !out.quat.is_empty() {
                 let quat = decode_packed_splat_quat(elements);
-                for d in 0..4 {
-                    out.quat[i4 + d] = quat[d];
-                }
+                out.quat[i4..i4 + 4].copy_from_slice(&quat);
             }
         }
 
+        if !out.labels.is_empty() { self.get_label(base, count, out.labels); }
+        if !out.instances.is_empty() { self.get_instance_label(base, count, out.instances); }
         if !out.sh1.is_empty() {
             self.get_sh1(base, count, out.sh1);
         }
@@ -831,11 +847,19 @@ impl SplatGetter for PackedSplatsData {
     }
 
     fn get_label(&mut self, base: usize, count: usize, out: &mut [u32]) {
-        todo!(); 
+        if let Some(values) = &self.labels {
+            values.subarray(base as u32, (base + count) as u32).copy_to(&mut out[..count]);
+        } else {
+            out[..count].fill(0);
+        }
     }
 
     fn get_instance_label(&mut self, base: usize, count: usize, out: &mut [u32]) {
-        todo!(); 
+        if let Some(values) = &self.instances {
+            values.subarray(base as u32, (base + count) as u32).copy_to(&mut out[..count]);
+        } else {
+            out[..count].fill(0);
+        }
     }
 
     fn get_center(&mut self, base: usize, count: usize, out: &mut [f32]) {
@@ -910,7 +934,7 @@ impl SplatGetter for PackedSplatsData {
             let [i2, i9] = [i * 2, i * 9];
             let words = [self.buffer[i2], self.buffer[i2 + 1]];
             let decoded = decode_sh1_internal_words(words, sh1_scale);
-            for k in 0..9 { out[i9 + k] = decoded[k]; }
+            out[i9..i9 + 9].copy_from_slice(&decoded);
         }
     }
 
@@ -928,7 +952,7 @@ impl SplatGetter for PackedSplatsData {
             let [i4, i15] = [i * 4, i * 15];
             let words = [self.buffer[i4], self.buffer[i4 + 1], self.buffer[i4 + 2], self.buffer[i4 + 3]];
             let decoded = decode_sh2_internal_words(words, sh2_scale);
-            for k in 0..15 { out[i15 + k] = decoded[k]; }
+            out[i15..i15 + 15].copy_from_slice(&decoded);
         }
     }
 
@@ -946,7 +970,7 @@ impl SplatGetter for PackedSplatsData {
             let [i4, i21] = [i * 4, i * 21];
             let words = [self.buffer[i4], self.buffer[i4 + 1], self.buffer[i4 + 2], self.buffer[i4 + 3]];
             let decoded = decode_sh3_internal_words(words, sh3_scale);
-            for k in 0..21 { out[i21 + k] = decoded[k]; }
+            out[i21..i21 + 21].copy_from_slice(&decoded);
         }
     }
 

@@ -1,12 +1,11 @@
 use std::array;
-use std::collections::HashMap;
-use serde_wasm_bindgen::to_value;
 
 use js_sys::{Array, Object, Reflect, Uint32Array};
+#[cfg(feature = "csplat")]
+use spark_lib::csplat::CsplatArray;
 use spark_lib::{
     decoder::{SetSplatEncoding, SplatEncoding, SplatGetter, SplatInit, SplatProps, SplatPropsMut, SplatReceiver, copy_getter_to_receiver},
     gsplat::GsplatArray,
-    csplat::CsplatArray,
     tsplat::{TsplatArray, Tsplat},
     splat_encode::{
         decode_ext_rgb, decode_ext_splat_center, decode_ext_splat_opacity, decode_ext_splat_quat, decode_ext_splat_rgb, decode_ext_splat_scale, encode_ext_rgb, encode_ext_splat, encode_ext_splat_center, encode_ext_splat_opacity, encode_ext_splat_quat, encode_ext_splat_rgb, encode_ext_splat_rgba, encode_ext_splat_scale, encode_lod_tree, get_splat_tex_size
@@ -21,7 +20,6 @@ pub struct ExtSplatsData {
     pub ext_arrays: [Uint32Array; 2],
     pub labels: Option<Uint32Array>,
     pub instances: Option<Uint32Array>,
-    pub label_info: Option<HashMap<std::string::String, f64>>,
     pub sh1: Option<Uint32Array>,
     pub sh2: Option<Uint32Array>,
     pub sh3a: Option<Uint32Array>,
@@ -51,7 +49,6 @@ impl ExtSplatsData {
             ext_arrays: [Uint32Array::new_with_length(0), Uint32Array::new_with_length(0)],
             labels: None,
             instances: None,
-            label_info: None,
             sh1: None,
             sh2: None,
             sh3a: None,
@@ -85,10 +82,6 @@ impl ExtSplatsData {
         }
         if let Some(instances) = self.instances.as_ref() {
             Reflect::set(&object, &JsValue::from_str("instances"), &JsValue::from(instances)).unwrap();
-        }
-        if let Some(label_info) = self.label_info.as_ref() {
-            let js_label_info = to_value(&label_info).unwrap();
-            Reflect::set(&object, &JsValue::from_str("label_info"), &js_label_info).unwrap();
         }
         if let Some(sh1) = self.sh1.as_ref() {
             Reflect::set(&object, &JsValue::from_str("sh1"), &JsValue::from(sh1)).unwrap();
@@ -127,6 +120,13 @@ impl ExtSplatsData {
         data.ext_arrays = ext_arrays;
 
         if let Some(extra) = extra {
+            if let Ok(labels) = Reflect::get(extra, &JsValue::from_str("labels")) {
+                if !labels.is_falsy() { data.labels = Some(Uint32Array::from(labels)); }
+            }
+            if let Ok(instances) = Reflect::get(extra, &JsValue::from_str("instances")) {
+                if !instances.is_falsy() { data.instances = Some(Uint32Array::from(instances)); }
+            }
+
             if let Ok(sh1) = Reflect::get(extra, &JsValue::from_str("sh1")) {
                 if !sh1.is_falsy() {
                     data.sh1 = Some(Uint32Array::from(sh1));
@@ -228,6 +228,8 @@ impl ExtSplatsData {
         {
             let mut batch_center = vec![0.0; 3 * MAX_SPLAT_CHUNK];
             let mut batch_opacity = vec![0.0; MAX_SPLAT_CHUNK];
+            let mut batch_labels = vec![0; MAX_SPLAT_CHUNK];
+            let mut batch_instances = vec![0; MAX_SPLAT_CHUNK];
             let mut batch_rgb = vec![0.0; 3 * MAX_SPLAT_CHUNK];
             let mut batch_scale = vec![0.0; 3 * MAX_SPLAT_CHUNK];
             let mut batch_quat = vec![0.0; 4 * MAX_SPLAT_CHUNK];
@@ -244,16 +246,14 @@ impl ExtSplatsData {
                     let scales = splat.scales();
                     let quat = splat.quaternion().to_array();
 
-                    for d in 0..3 {
-                        batch_center[i3 + d] = center[d];
-                        batch_rgb[i3 + d] = rgb[d];
-                        batch_scale[i3 + d] = scales[d];
-                    }
-                    for d in 0..4 {
-                        batch_quat[i4 + d] = quat[d];
-                    }
+                    batch_center[i3..(i3 + 3)].copy_from_slice(&center.to_array());
+                    batch_rgb[i3..(i3 + 3)].copy_from_slice(&rgb.to_array());
+                    batch_scale[i3..(i3 + 3)].copy_from_slice(&scales.to_array());
+                    batch_quat[i4..(i4 + 4)].copy_from_slice(&quat);
 
                     batch_opacity[i] = splat.opacity();
+                    batch_labels[i] = splat.label();
+                    batch_instances[i] = splat.instance_label();
 
                     if lod_tree {
                         let (count, start) = splats.get_child_count_start(base + i);
@@ -269,6 +269,8 @@ impl ExtSplatsData {
                 receiver.set_batch(base, count, &SplatProps {
                     center: &batch_center,
                     opacity: &batch_opacity,
+                    labels: &batch_labels,
+                    instances: &batch_instances,
                     rgb: &batch_rgb,
                     scale: &batch_scale,
                     quat: &batch_quat,
@@ -288,9 +290,7 @@ impl ExtSplatsData {
                 for i in 0..count {
                     let i9 = i * 9;
                     let values = splats.get_sh1(base + i);
-                    for d in 0..9 {
-                        batch[i9 + d] = values[d];
-                    }
+                    batch[i9..i9 + 9].copy_from_slice(&values);
                 }
                 receiver.set_sh1(base, count, &batch);
                 base += count;
@@ -305,9 +305,7 @@ impl ExtSplatsData {
                 for i in 0..count {
                     let i15 = i * 15;
                     let values = splats.get_sh2(base + i);
-                    for d in 0..15 {
-                        batch[i15 + d] = values[d];
-                    }
+                    batch[i15..i15 + 15].copy_from_slice(&values);
                 }
                 receiver.set_sh2(base, count, &batch);
                 base += count;
@@ -322,9 +320,7 @@ impl ExtSplatsData {
                 for i in 0..count {
                     let i21 = i * 21;
                     let values = splats.get_sh3(base + i);
-                    for d in 0..21 {
-                        batch[i21 + d] = values[d];
-                    }
+                    batch[i21..i21 + 21].copy_from_slice(&values);
                 }
                 receiver.set_sh3(base, count, &batch);
                 base += count;
@@ -342,6 +338,7 @@ impl ExtSplatsData {
     }
 
     #[allow(dead_code)]
+    #[cfg(feature = "csplat")]
     pub fn to_csplat_array(&mut self) -> anyhow::Result<CsplatArray> {
         let mut out = CsplatArray::new();
         copy_getter_to_receiver(self, &mut out)?;
@@ -462,8 +459,8 @@ impl SplatReceiver for ExtSplatsData {
             self.child_counts = None;
         }
 
-        std::mem::swap(&mut self.buffer_a, &mut Vec::new());
-        std::mem::swap(&mut self.buffer_b, &mut Vec::new());
+        self.buffer_a = Vec::new();
+        self.buffer_b = Vec::new();
         Ok(())
     }
 
@@ -801,9 +798,7 @@ impl SplatReceiver for ExtSplatsData {
                 let label = sh_labels[i] as usize;
                 let i4 = i * 4;
                 let l4 = label * 4;
-                for k in 0..4 {
-                    buffer_a[i4 + k] = self.sh1_codes[l4 + k];
-                }
+                buffer_a[i4..i4 + 4].copy_from_slice(&self.sh1_codes[l4..l4 + 4]);
             }
 
             if self.max_sh_degree == 1 {
@@ -836,9 +831,7 @@ impl SplatReceiver for ExtSplatsData {
                             let label = sh_labels[i] as usize;
                             let i4 = i * 4;
                             let l4 = label * 4;
-                            for k in 0..4 {
-                                buffer_a[i4 + k] = self.sh3_codes[0][l4 + k];
-                            }
+                            buffer_a[i4..i4 + 4].copy_from_slice(&self.sh3_codes[0][l4..l4 + 4]);
                             for k in 4..7 {
                                 buffer_b[i4 + (k - 4)] = self.sh3_codes[1][l4 + (k - 4)];
                             }
@@ -858,9 +851,7 @@ impl SplatReceiver for ExtSplatsData {
             self.child_counts = Some(vec![0; self.num_splats]);
         }
         let counts = self.child_counts.as_mut().unwrap();
-        for i in 0..count {
-            counts[base + i] = child_count[i];
-        }
+        counts[base..base + count].copy_from_slice(&child_count[..count]);
     }
 
     fn set_child_start(&mut self, base: usize, count: usize, child_start: &[usize]) {
@@ -874,27 +865,11 @@ impl SplatReceiver for ExtSplatsData {
     }
 
     fn set_label(&mut self, base: usize, count: usize, values: &[u32]) {
-        self.invalidate_buffers();
-        self.ensure_buffer_a(count);
-        if let Some(labels) = self.labels.as_ref() {
-            let buffer = &mut self.buffer_a[0..count];
-            for i in 0..count {
-                buffer[i] = values[i] as u32;
-            }
-            labels.subarray(base as u32, (base + count) as u32).copy_from(buffer);
-        }
+        self.labels.as_ref().unwrap().subarray(base as u32, (base + count) as u32).copy_from(&values[..count]);
     }
 
     fn set_instance_label(&mut self, base: usize, count: usize, values: &[u32]) {
-        self.invalidate_buffers();
-        self.ensure_buffer_a(count);
-        if let Some(instances) = self.instances.as_ref() {
-            let buffer = &mut self.buffer_a[0..count];
-            for i in 0..count {
-                buffer[i] = values[i] as u32;
-            }
-            instances.subarray(base as u32, (base + count) as u32).copy_from(buffer);
-        }
+        self.instances.as_ref().unwrap().subarray(base as u32, (base + count) as u32).copy_from(&values[..count]);
     }
 }
 
@@ -905,22 +880,18 @@ impl SplatGetter for ExtSplatsData {
     fn get_encoding(&mut self) -> Option<SplatEncoding> { None }
 
     fn get_label(&mut self, base: usize, count: usize, out: &mut [u32]) {
-        if count == 0 { return; }
-        self.prepare_buffers(base, count);
-        if let Some(labels) = self.labels.as_ref() {
-            for i in 0..count {
-                out[i] = (*labels).get_index(i as u32);
-            }
+        if let Some(values) = &self.labels {
+            values.subarray(base as u32, (base + count) as u32).copy_to(&mut out[..count]);
+        } else {
+            out[..count].fill(0);
         }
     }
 
     fn get_instance_label(&mut self, base: usize, count: usize, out: &mut [u32]) {
-        if count == 0 { return; }
-        self.prepare_buffers(base, count);
-         if let Some(instances) = self.instances.as_ref() {
-            for i in 0..count {
-                out[i] = (*instances).get_index(i as u32);
-            }
+        if let Some(values) = &self.instances {
+            values.subarray(base as u32, (base + count) as u32).copy_to(&mut out[..count]);
+        } else {
+            out[..count].fill(0);
         }
     }
 
@@ -935,9 +906,7 @@ impl SplatGetter for ExtSplatsData {
             let buffer_b = &self.buffer_b[i4..i4 + 4];
             if !out.center.is_empty() {
                 let center = decode_ext_splat_center(buffer_a);
-                for d in 0..3 {
-                    out.center[i3 + d] = center[d];
-                }
+                out.center[i3..i3 + 3].copy_from_slice(&center);
             }
             if !out.opacity.is_empty() {
                 let opacity = decode_ext_splat_opacity(buffer_a);
@@ -945,24 +914,20 @@ impl SplatGetter for ExtSplatsData {
             }
             if !out.rgb.is_empty() {
                 let rgb = decode_ext_splat_rgb(buffer_b);
-                for d in 0..3 {
-                    out.rgb[i3 + d] = rgb[d];
-                }
+                out.rgb[i3..i3 + 3].copy_from_slice(&rgb);
             }
             if !out.scale.is_empty() {
                 let scale = decode_ext_splat_scale(buffer_b);
-                for d in 0..3 {
-                    out.scale[i3 + d] = scale[d];
-                }
+                out.scale[i3..i3 + 3].copy_from_slice(&scale);
             }
             if !out.quat.is_empty() {
                 let quat = decode_ext_splat_quat(buffer_b);
-                for d in 0..4 {
-                    out.quat[i4 + d] = quat[d];
-                }
+                out.quat[i4..i4 + 4].copy_from_slice(&quat);
             }
         }
 
+        if !out.labels.is_empty() { self.get_label(base, count, out.labels); }
+        if !out.instances.is_empty() { self.get_instance_label(base, count, out.instances); }
         if !out.sh1.is_empty() {
             self.get_sh1(base, count, out.sh1);
         }

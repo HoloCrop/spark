@@ -1,17 +1,22 @@
 use std::any::Any;
+use std::io::{ErrorKind, Read};
 
-
-use miniz_oxide::inflate::{core::{decompress, inflate_flags::{TINFL_FLAG_HAS_MORE_INPUT, TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF}, DecompressorOxide}, TINFLStatus};
+#[cfg(feature = "spz")]
+use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    antisplat::AntiSplatDecoder,
-    ksplat::KsplatDecoder,
-    ply::{PLY_MAGIC, PlyDecoder},
-    rad::{RAD_CHUNK_MAGIC, RAD_MAGIC, RadDecoder},
-    sogs::SogsDecoder,
-    spz::{SPZ_MAGIC, SpzDecoder}
-};
+#[cfg(feature = "antisplat")]
+use crate::antisplat::AntiSplatDecoder;
+#[cfg(feature = "ksplat")]
+use crate::ksplat::KsplatDecoder;
+#[cfg(feature = "ply")]
+use crate::ply::{PLY_MAGIC, PlyDecoder};
+#[cfg(feature = "rad")]
+use crate::rad::{RAD_CHUNK_MAGIC, RAD_MAGIC, RadDecoder};
+#[cfg(feature = "sogs")]
+use crate::sogs::{PK_MAGIC, SogsDecoder};
+#[cfg(feature = "spz")]
+use crate::spz::{GZIP_MAGIC, SPZ_MAGIC, SpzDecoder};
 
 pub trait ChunkReceiver: Any {
     fn push(&mut self, bytes: &[u8]) -> anyhow::Result<()>;
@@ -22,21 +27,11 @@ impl dyn ChunkReceiver {
     pub fn into_any(self: Box<Self>) -> Box<dyn Any> { self }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SplatInit {
     pub num_splats: usize,
     pub max_sh_degree: usize,
     pub lod_tree: bool,
-}
-
-impl Default for SplatInit {
-    fn default() -> Self {
-        Self {
-            num_splats: 0,
-            max_sh_degree: 0,
-            lod_tree: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,7 +104,7 @@ impl From<SplatEncoding> for SetSplatEncoding {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SplatProps<'a> {
     pub center: &'a [f32],
     pub opacity: &'a [f32],
@@ -123,25 +118,6 @@ pub struct SplatProps<'a> {
     pub instances: &'a [u32],
     pub child_count: &'a [u16],
     pub child_start: &'a [usize],
-}
-
-impl<'a> Default for SplatProps<'a> {
-    fn default() -> Self {
-        Self {
-            center: &[],
-            opacity: &[],
-            rgb: &[],
-            scale: &[],
-            quat: &[],
-            sh1: &[],
-            sh2: &[],
-            sh3: &[],
-            labels: &[],
-            instances: &[],
-            child_count: &[],
-            child_start: &[],
-        }
-    }
 }
 
 #[allow(unused)]
@@ -186,6 +162,8 @@ pub struct SplatPropsArray {
     pub rgb: Vec<f32>,
     pub scale: Vec<f32>,
     pub quat: Vec<f32>,
+    pub labels: Vec<u32>,
+    pub instances: Vec<u32>,
     pub sh1: Vec<f32>,
     pub sh2: Vec<f32>,
     pub sh3: Vec<f32>,
@@ -203,6 +181,8 @@ impl SplatPropsArray {
             rgb: vec![0.0; count * 3],
             scale: vec![0.0; count * 3],
             quat: vec![0.0; count * 4],
+            labels: vec![0; count],
+            instances: vec![0; count],
             sh1: vec![0.0; count * 9],
             sh2: vec![0.0; count * 15],
             sh3: vec![0.0; count * 21],
@@ -238,6 +218,8 @@ impl SplatPropsArray {
             rgb: &mut self.rgb,
             scale: &mut self.scale,
             quat: &mut self.quat,
+            labels: &mut self.labels,
+            instances: &mut self.instances,
             sh1: &mut self.sh1,
             sh2: &mut self.sh2,
             sh3: &mut self.sh3,
@@ -247,35 +229,20 @@ impl SplatPropsArray {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct SplatPropsMut<'a> {
     pub center: &'a mut [f32],
     pub opacity: &'a mut [f32],
     pub rgb: &'a mut [f32],
     pub scale: &'a mut [f32],
     pub quat: &'a mut [f32],
+    pub labels: &'a mut [u32],
+    pub instances: &'a mut [u32],
     pub sh1: &'a mut [f32],
     pub sh2: &'a mut [f32],
     pub sh3: &'a mut [f32],
     pub child_count: &'a mut [u16],
     pub child_start: &'a mut [usize],
-}
-
-impl<'a> Default for SplatPropsMut<'a> {
-    fn default() -> Self {
-        Self {
-            center: &mut [],
-            opacity: &mut [],
-            rgb: &mut [],
-            scale: &mut [],
-            quat: &mut [],
-            sh1: &mut [],
-            sh2: &mut [],
-            sh3: &mut [],
-            child_count: &mut [],
-            child_start: &mut [],
-        }
-    }
 }
 
 #[allow(unused)]
@@ -302,6 +269,12 @@ pub trait SplatGetter: 'static {
         }
         if !out.quat.is_empty() {
             self.get_quat(base, count, out.quat);
+        }
+        if !out.labels.is_empty() {
+            self.get_label(base, count, out.labels);
+        }
+        if !out.instances.is_empty() {
+            self.get_instance_label(base, count, out.instances);
         }
         if !out.sh1.is_empty() {
             self.get_sh1(base, count, out.sh1);
@@ -335,38 +308,55 @@ pub trait SplatGetter: 'static {
     fn get_child_start(&mut self, _base: usize, _count: usize, _out: &mut [usize]) {}
     fn get_label(&mut self, base: usize, count: usize, out: &mut [u32]);
     fn get_instance_label(&mut self, base: usize, count: usize, out: &mut [u32]);
-    fn has_labels(&self) -> bool { true }  // default opt-in
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum SplatFileType {
+    #[cfg(feature = "ply")]
     PLY,
+    #[cfg(feature = "spz")]
     SPZ,
+    #[cfg(feature = "antisplat")]
     ANTISPLAT,
+    #[cfg(feature = "ksplat")]
     KSPLAT,
+    #[cfg(feature = "sogs")]
     SOGS,
+    #[cfg(feature = "rad")]
     RAD,
 }
 
 impl SplatFileType {
     pub fn to_enum_str(self) -> &'static str {
         match self {
+            #[cfg(feature = "ply")]
             Self::PLY => "ply",
+            #[cfg(feature = "spz")]
             Self::SPZ => "spz",
+            #[cfg(feature = "antisplat")]
             Self::ANTISPLAT => "splat",
+            #[cfg(feature = "ksplat")]
             Self::KSPLAT => "ksplat",
+            #[cfg(feature = "sogs")]
             Self::SOGS => "pcsogszip",
+            #[cfg(feature = "rad")]
             Self::RAD => "rad",
         }
     }
 
     pub fn from_enum_str(enum_str: &str) -> anyhow::Result<Self> {
         match enum_str {
+            #[cfg(feature = "ply")]
             "ply" => Ok(Self::PLY),
+            #[cfg(feature = "spz")]
             "spz" => Ok(Self::SPZ),
+            #[cfg(feature = "antisplat")]
             "splat" => Ok(Self::ANTISPLAT),
+            #[cfg(feature = "ksplat")]
             "ksplat" => Ok(Self::KSPLAT),
+            #[cfg(feature = "sogs")]
             "pcsogszip" => Ok(Self::SOGS),
+            #[cfg(feature = "rad")]
             "rad" => Ok(Self::RAD),
             _ => Err(anyhow::anyhow!("Invalid file type: {}", enum_str)),
         }
@@ -374,13 +364,21 @@ impl SplatFileType {
 
     pub fn from_extension(extension: &str) -> Option<Self> {
         match extension.to_lowercase().as_str() {
+            #[cfg(feature = "ply")]
             "ply" => Some(Self::PLY),
+            #[cfg(feature = "spz")]
             "spz" => Some(Self::SPZ),
+            #[cfg(feature = "antisplat")]
             "splat" => Some(Self::ANTISPLAT),
+            #[cfg(feature = "ksplat")]
             "ksplat" => Some(Self::KSPLAT),
+            #[cfg(feature = "sogs")]
             "sog" => Some(Self::SOGS),
+            #[cfg(feature = "sogs")]
             "sogs" => Some(Self::SOGS),
+            #[cfg(feature = "sogs")]
             "zip" => Some(Self::SOGS),
+            #[cfg(feature = "rad")]
             "rad" => Some(Self::RAD),
             _ => None,
         }
@@ -393,7 +391,7 @@ impl SplatFileType {
         let clean_path = clean_path
             .split_once('#')
             .map_or(clean_path, |(path, _)| path);
-        clean_path.split('.').last().and_then(Self::from_extension)
+        clean_path.split('.').next_back().and_then(Self::from_extension)
     }
 }
 
@@ -429,26 +427,32 @@ impl<T: SplatReceiver> MultiDecoder<T> {
 
     pub fn into_splats(self) -> T {
         let inner_any = self.inner.unwrap().into_any();
+        #[cfg(feature = "ply")]
         let inner_any = match inner_any.downcast::<PlyDecoder<T>>() {
             Ok(ply) => { return ply.into_splats(); },
             Err(inner_any) => inner_any,
         };
+        #[cfg(feature = "spz")]
         let inner_any = match inner_any.downcast::<SpzDecoder<T>>() {
             Ok(spz) => { return spz.into_splats(); },
             Err(inner_any) => inner_any,
         };
+        #[cfg(feature = "antisplat")]
         let inner_any = match inner_any.downcast::<AntiSplatDecoder<T>>() {
             Ok(antisplat) => { return antisplat.into_splats(); },
             Err(inner_any) => inner_any,
         };
+        #[cfg(feature = "ksplat")]
         let inner_any = match inner_any.downcast::<KsplatDecoder<T>>() {
             Ok(ksplat) => { return ksplat.into_splats(); },
             Err(inner_any) => inner_any,
         };
+        #[cfg(feature = "sogs")]
         let inner_any = match inner_any.downcast::<SogsDecoder<T>>() {
             Ok(sogs) => { return sogs.into_splats(); },
             Err(inner_any) => inner_any,
         };
+        #[cfg(feature = "rad")]
         let inner_any = match inner_any.downcast::<RadDecoder<T>>() {
             Ok(rad) => { return rad.into_splats(); },
             Err(inner_any) => inner_any,
@@ -469,8 +473,6 @@ impl<T: SplatReceiver> MultiDecoder<T> {
     }
 }
 
-const GZIP_MAGIC: u32 = 0x00088b1f; // Gzip deflate
-
 impl<T: SplatReceiver> ChunkReceiver for MultiDecoder<T> {
     fn push(&mut self, bytes: &[u8]) -> anyhow::Result<()> {
         if self.file_type.is_none() {
@@ -482,34 +484,48 @@ impl<T: SplatReceiver> ChunkReceiver for MultiDecoder<T> {
             let mut detection_complete = false;
 
             let magic = u32::from_le_bytes([self.buffer[0], self.buffer[1], self.buffer[2], self.buffer[3]]);
-            if (magic & 0x00ffffff) == PLY_MAGIC {
-                return self.init_file_type(SplatFileType::PLY);
-            }
-            if (magic & 0x00ffffff) == GZIP_MAGIC {
-                // Gzipped file, unpack beginning to check magic number
-                if self.buffer_gz.is_none() {
-                    self.buffer_gz = try_gunzip(&self.buffer, 4)?;
+            match (magic, magic & 0x00ffffff) {
+                #[cfg(feature = "ply")]
+                (_, PLY_MAGIC) => {
+                    return self.init_file_type(SplatFileType::PLY);
                 }
-                if let Some(buffer_gz) = self.buffer_gz.as_ref() {
-                    detection_complete = true;
-                    if buffer_gz.len() >= 4 {
-                        let magic = u32::from_le_bytes([buffer_gz[0], buffer_gz[1], buffer_gz[2], buffer_gz[3]]);
-                        if magic == SPZ_MAGIC {
-                            return self.init_file_type(SplatFileType::SPZ);
+                #[cfg(feature = "spz")]
+                (SPZ_MAGIC, _) => {
+                    // SPZ v4 files have NGSP magic at file start
+                    return self.init_file_type(SplatFileType::SPZ);
+                }
+                #[cfg(feature = "spz")]
+                (_, GZIP_MAGIC) => {
+                    // Gzipped file, unpack beginning to check magic number
+                    if self.buffer_gz.is_none() {
+                        self.buffer_gz = try_gunzip(&self.buffer, 4)?;
+                    }
+                    if let Some(buffer_gz) = self.buffer_gz.as_ref() {
+                        detection_complete = true;
+                        if buffer_gz.len() >= 4 {
+                            let magic = u32::from_le_bytes([buffer_gz[0], buffer_gz[1], buffer_gz[2], buffer_gz[3]]);
+                            if magic == SPZ_MAGIC {
+                                return self.init_file_type(SplatFileType::SPZ);
+                            }
                         }
                     }
                 }
-            } else if magic == 0x04034b50 {
-                detection_complete = true;
-                if let Some(pathname) = &self.pathname {
-                    if let Some(SplatFileType::SOGS) = SplatFileType::from_pathname(pathname) {
-                        return self.init_file_type(SplatFileType::SOGS);
+                #[cfg(feature = "sogs")]
+                (PK_MAGIC, _) => {
+                    detection_complete = true;
+                    if let Some(pathname) = &self.pathname {
+                        if let Some(SplatFileType::SOGS) = SplatFileType::from_pathname(pathname) {
+                            return self.init_file_type(SplatFileType::SOGS);
+                        }
                     }
                 }
-            } else if magic == RAD_MAGIC || magic == RAD_CHUNK_MAGIC {
-                return self.init_file_type(SplatFileType::RAD);
-            } else {
-                detection_complete = true;
+                #[cfg(feature = "rad")]
+                (RAD_MAGIC, _) | (RAD_CHUNK_MAGIC, _) => {
+                    return self.init_file_type(SplatFileType::RAD);
+                }
+                _ => {
+                    detection_complete = true;
+                }
             }
 
             if detection_complete {
@@ -539,105 +555,41 @@ impl<T: SplatReceiver> ChunkReceiver for MultiDecoder<T> {
 
 fn new_decoder<T: SplatReceiver>(file_type: SplatFileType, splats: T) -> Box<dyn ChunkReceiver> {
     match file_type {
+        #[cfg(feature = "ply")]
         SplatFileType::PLY => Box::new(PlyDecoder::new(splats)),
+        #[cfg(feature = "spz")]
         SplatFileType::SPZ => Box::new(SpzDecoder::new(splats)),
+        #[cfg(feature = "antisplat")]
         SplatFileType::ANTISPLAT => Box::new(AntiSplatDecoder::new(splats)),
+        #[cfg(feature = "ksplat")]
         SplatFileType::KSPLAT => Box::new(KsplatDecoder::new(splats)),
+        #[cfg(feature = "sogs")]
         SplatFileType::SOGS => Box::new(SogsDecoder::new(splats, None)),
+        #[cfg(feature = "rad")]
         SplatFileType::RAD => Box::new(RadDecoder::new(splats)),
     }
 }
 
+#[cfg(feature = "spz")]
 fn try_gunzip(buffer: &[u8], max_bytes: usize) -> anyhow::Result<Option<Vec<u8>>> {
+    // At least 10 bytes are needed to cover the GZIP header, no use decoding less
     if buffer.len() < 10 {
-        return Ok(None);
-    }
-    if buffer[0] != 0x1f || buffer[1] != 0x8b || buffer[2] != 8 {
-        return Err(anyhow::anyhow!("Invalid gzip header"));
-    }
-
-    let flags = buffer[3];
-    let mut end = 10;
-
-    if (flags & 0x04) != 0 {
-        if buffer.len() < end + 2 {
-            return Ok(None);
-        }
-        let extra_len = (buffer[end] as usize) | ((buffer[end + 1] as usize) << 8);
-        end += 2;
-        if buffer.len() < end + extra_len {
-            return Ok(None);
-        }
-        end += extra_len;
-    }
-
-    if (flags & 0x08) != 0 {
-        let mut null = end;
-        let mut found = false;
-        while null < buffer.len() {
-            if buffer[null] == 0 {
-                null += 1;
-                found = true;
-                break;
-            }
-            null += 1;
-        }
-        if !found {
-            return Ok(None);
-        }
-        end = null;
-    }
-
-    if (flags & 0x10) != 0 {
-        let mut null = end;
-        let mut found = false;
-        while null < buffer.len() {
-            if buffer[null] == 0 {
-                null += 1;
-                found = true;
-                break;
-            }
-            null += 1;
-        }
-        if !found {
-            return Ok(None);
-        }
-        end = null;
-    }
-
-    if (flags & 0x02) != 0 {
-        if buffer.len() < end + 2 {
-            return Ok(None);
-        }
-        end += 2;
-    }
-    
-    if buffer.len() <= end {
         return Ok(None);
     }
 
     let mut buffer_gz = vec![0u8; max_bytes];
-    let mut decompressor = DecompressorOxide::new();
-    let (status, _in_consumed, out_written) = decompress(
-        &mut decompressor,
-        &buffer[end..],
-        &mut buffer_gz,
-        0,
-        TINFL_FLAG_HAS_MORE_INPUT | TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF,
-    );
-    match status {
-        TINFLStatus::Failed => {
-            Ok(Some(Vec::new()))
-        }
-        TINFLStatus::Done | TINFLStatus::HasMoreOutput => {
+    let mut decoder = GzDecoder::new(buffer);
+    let out = decoder.read(&mut buffer_gz);
+    match out {
+        Ok(out_written) if out_written < max_bytes => Ok(None),
+        Ok(out_written) => {
             buffer_gz.truncate(out_written);
             Ok(Some(buffer_gz))
-        }
-        TINFLStatus::NeedsMoreInput => {
-            // Do nothing, try again next time
-            Ok(None)
-        }
-        _ => Err(anyhow::anyhow!("Decompression failed: {:?}", status))
+        },
+        Err(error) => match error.kind() {
+            ErrorKind::UnexpectedEof => Ok(None),
+            _ => Ok(Some(Vec::new()))
+        },
     }
 }
 
@@ -685,6 +637,9 @@ pub fn copy_getter_to_receiver<G: SplatGetter, R: SplatReceiver>(getter: &mut G,
         getter.get_rgb(base, count, &mut rgb[..count * 3]);
         getter.get_scale(base, count, &mut scale[..count * 3]);
 
+        getter.get_quat(base, count, &mut quat[..count * 4]);
+        labels.resize(count, 0);
+        instances.resize(count, 0);
         getter.get_label(base, count, &mut labels[..count]);
         getter.get_instance_label(base, count, &mut instances[..count]);
 

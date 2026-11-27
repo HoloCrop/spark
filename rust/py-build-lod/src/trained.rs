@@ -42,7 +42,7 @@ impl TrainedLevel {
         let mut result = GsplatArray::new_capacity(opacity.len(), 3);
         for index in 0..opacity.len() {
             let shape = Vec3A::from_array(array::from_fn(|axis| scales[index * 3 + axis].exp()));
-            let color = Vec3A::from_array(array::from_fn(|axis| 0.5 + features[index * 48 + axis * 16] * 0.28209479177387814));
+            let color = Vec3A::from_array(array::from_fn(|axis| 0.5 + features[index * 48 + axis * 16] * 0.282_094_8));
             let quaternion = Quat::from_slice(&rotation[index * 4..index * 4 + 4]).normalize();
             let splat = Gsplat::new(Vec3A::from_slice(&position[index * 3..index * 3 + 3]),
                 1.0 / (1.0 + (-opacity[index]).exp()), color, shape, quaternion,

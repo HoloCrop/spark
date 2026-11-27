@@ -27,7 +27,6 @@ function waitForGPU(signal: AbortSignal): Promise<void> {
 /** Owns one immutable GPU snapshot until its complete CPU copy is available. */
 export class SplatDepthReadback {
   private buffer: WebGLBuffer | null = null;
-  private capacity = 0;
   private active?: AbortController;
   private disposed = false;
 
@@ -46,7 +45,6 @@ export class SplatDepthReadback {
   private releaseBuffer() {
     if (this.buffer) this.gl.deleteBuffer(this.buffer);
     this.buffer = null;
-    this.capacity = 0;
   }
 
   dispose() {
@@ -70,13 +68,13 @@ export class SplatDepthReadback {
       const previous = gl.getParameter(gl.PIXEL_PACK_BUFFER_BINDING) as WebGLBuffer | null;
       gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.buffer);
       try {
-        if (destination.byteLength > this.capacity) {
-          this.capacity = Math.max(destination.byteLength, this.capacity * 2);
-          gl.bufferData(gl.PIXEL_PACK_BUFFER, this.capacity, gl.STREAM_READ);
-        }
+        // Replace storage before the next snapshot writes, retiring the driver's
+        // fenced readback shadow while reusing the buffer handle.
+        gl.bufferData(gl.PIXEL_PACK_BUFFER, destination.byteLength, gl.STREAM_READ);
         // Every layer is enqueued before yielding: accumulators can be recycled later.
         snapshot();
         fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+        if (fence === null) throw new Error("Unable to create depth readback fence");
         gl.flush();
       } finally {
         gl.bindBuffer(gl.PIXEL_PACK_BUFFER, previous);
@@ -85,7 +83,7 @@ export class SplatDepthReadback {
       while (true) {
         await this.scheduler.waitForGPU(signal);
         if (signal.aborted) throw new ReadbackCancelledError();
-        const status = gl.clientWaitSync(fence!, 0, 0);
+        const status = gl.clientWaitSync(fence, 0, 0);
         if (status === gl.WAIT_FAILED) throw new Error("Depth readback fence failed");
         if (status !== gl.TIMEOUT_EXPIRED) break;
       }
