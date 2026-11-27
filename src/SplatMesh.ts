@@ -3,8 +3,11 @@ import * as THREE from "three";
 import {
   get_raycast_buffer,
   get_raycast_buffer2,
+  get_raycast_indices,
   raycast_ext_buffers,
   raycast_packed_buffer,
+  raycast_surface_depth,
+  raycast_surface_index,
 } from "spark-rs";
 import { ExtSplats } from "./ExtSplats";
 import { PackedSplats } from "./PackedSplats";
@@ -89,7 +92,7 @@ export type SplatMeshOptions = {
   editable?: boolean;
   // Controls whether SplatMesh participates in Three.js raycasting (default: true)
   raycastable?: boolean;
-  // Minimum opacity for raycasting splats. (default: 0.2)
+  // Minimum k=2 Gaussian response along the ray. (default: 0.2)
   minRaycastOpacity?: number;
   // Callback function that is called every frame to update the mesh.
   // Call mesh.updateVersion() if splats need to be regenerated due to some change.
@@ -225,40 +228,6 @@ export class EmptySplatSource implements SplatSource {
   }
 
   forEachSplat() {}
-}
-
-type Contribution = { t: number; alpha: number };
-
-// Contributions must have finite t and renderer-adjusted alpha in [0, 1].
-function medianDepth(
-  hits: Contribution[],
-  near: number,
-  far: number,
-): number | null {
-  hits.sort((a, b) => a.t - b.t);
-
-  let T = 1;
-
-  for (const hit of hits) {
-    if (hit.t < 0) continue;
-    if (hit.t > far) break;
-
-    T *= 1 - hit.alpha;
-
-    if (T <= 0.5) {
-      return hit.t >= near ? hit.t : null;
-    }
-  }
-
-  return null; // Total opacity never reached 50%.
-}
-
-function toContributions(intersections: ArrayLike<number>): Contribution[] {
-  const out: Contribution[] = new Array(intersections.length >> 1);
-  for (let i = 0, j = 0; i + 1 < intersections.length; i += 2, j++) {
-    out[j] = { t: intersections[i], alpha: intersections[i + 1] };
-  }
-  return out;
 }
 
 export class SplatMesh extends SplatGenerator {
@@ -1043,20 +1012,20 @@ export class SplatMesh extends SplatGenerator {
     this.onFrame?.({ mesh: this, time, deltaTime });
   }
 
-  // This method conforms to the standard THREE.Raycaster API, performing object-ray
-  // intersections using this method to populate the provided intersects[] array
-  // with each intersection point.
+  // Append the combined k=2 transmittance's 0.5 surface crossing to intersects.
   raycast(
     raycaster: THREE.Raycaster,
     intersects: {
       distance: number;
       point: THREE.Vector3;
       object: THREE.Object3D;
+      index: number;
     }[],
   ) {
     if (
       !wasm.isInitialized() ||
       !this.raycastable ||
+      this.opacity === 0 ||
       (!this.packedSplats && !this.extSplats && !this.paged)
     ) {
       return;
@@ -1066,21 +1035,38 @@ export class SplatMesh extends SplatGenerator {
       ? (this.paged?.pager?.extSplats ?? false)
       : this.extSplats != null;
 
-    const { near, far, ray } = raycaster;
+    const { ray } = raycaster;
+    let { near, far } = raycaster;
     const worldToMesh = this.matrixWorld.clone().invert();
     const worldToMeshRot = new THREE.Matrix3().setFromMatrix4(worldToMesh);
     const origin = ray.origin.clone().applyMatrix4(worldToMesh);
     const direction = ray.direction.clone().applyMatrix3(worldToMeshRot);
+    let projection: Float32Array | undefined;
+    if (raycaster.camera instanceof THREE.PerspectiveCamera) {
+      const meshToView = new THREE.Matrix4().multiplyMatrices(
+        raycaster.camera.matrixWorldInverse,
+        this.matrixWorld,
+      );
+      projection = new Float32Array([
+        ...new THREE.Matrix3().setFromMatrix4(meshToView).elements,
+        raycaster.camera.near,
+        raycaster.camera.far,
+        raycaster.camera.projectionMatrix.elements[0],
+        raycaster.camera.projectionMatrix.elements[5],
+        raycaster.camera.projectionMatrix.elements[8],
+        raycaster.camera.projectionMatrix.elements[9],
+      ]);
+      const forward = -ray.direction.clone()
+        .transformDirection(raycaster.camera.matrixWorldInverse).z;
+      near = Math.max(near, raycaster.camera.near / forward);
+      far = Math.min(far, raycaster.camera.far / forward);
+    }
 
-    const buffer = get_raycast_buffer();
-    const bufferSize = buffer.length / 4;
-    let intersections = 0;
-
-    const numSplats =
+    let numSplats =
       this.raycastIndices?.numSplats ??
       (paged ? this.paged?.numSplats : this.context.numSplats.value) ??
       0;
-    const indices =
+    let indices =
       this.raycastIndices?.indices ??
       (paged
         ? (this.paged?.dynoIndices.value.image.data as Uint32Array)
@@ -1088,6 +1074,23 @@ export class SplatMesh extends SplatGenerator {
           ? (this.context.lodIndices.value.image.data as Uint32Array)
           : null) ??
       null;
+    if (this.paged?.pager && projection && !this.raycastIndices) {
+      indices = this.paged.pager.raycastBlocks.query(
+        this.paged.pager, indices!.subarray(0, numSplats), projection,
+        origin.toArray(), direction.toArray(),
+      );
+      numSplats = indices.length;
+    }
+    // Querying the index may grow Wasm memory: acquire its scratch views afterwards.
+    const buffer = get_raycast_buffer();
+    const bufferSize = buffer.length / 4;
+    let samples = 0;
+    const labels = this.paged?.pager?.labelTexture.value.image.data as
+      | Uint32Array
+      | undefined;
+    const labelsLookUp = this.paged?.pager?.lookUpTexture.value.image.data as
+      | Uint32Array
+      | undefined;
 
     if (!ext) {
       const packed = paged
@@ -1117,7 +1120,16 @@ export class SplatMesh extends SplatGenerator {
           }
         }
 
-        const newIntersections = raycast_packed_buffer(
+        if (labels !== undefined && labelsLookUp !== undefined) {
+          for (let i = 0; i < count; ++i) {
+            const index = indices ? indices[base + i] : base + i;
+            if (labelsLookUp[labels[index]] === 0) {
+              buffer[i * 4] &= 0x00ffffff;
+            }
+          }
+        }
+
+        const profiles = raycast_packed_buffer(
           origin.x,
           origin.y,
           origin.z,
@@ -1125,17 +1137,13 @@ export class SplatMesh extends SplatGenerator {
           direction.y,
           direction.z,
           this.minRaycastOpacity,
-          near,
-          far,
           count,
           splatEncoding?.lnScaleMin ?? LN_SCALE_MIN,
           splatEncoding?.lnScaleMax ?? LN_SCALE_MAX,
           splatEncoding?.lodOpacity ?? false,
+          projection,
         );
-        intersections = this.appendRaycastBuffer(
-          intersections,
-          newIntersections,
-        );
+        samples = this.appendRaycastBuffer(samples, profiles, get_raycast_indices(), base, indices);
       }
     } else {
       const buffer2 = get_raycast_buffer2();
@@ -1149,13 +1157,6 @@ export class SplatMesh extends SplatGenerator {
         : indices
           ? this.extSplats?.lodSplats?.extArrays[1]
           : this.extSplats?.extArrays[1];
-
-      const labels = paged 
-        ? (this.paged?.pager?.labelTexture.value.image.data as Uint32Array) 
-        : undefined;
-      const labelsLookUp = paged 
-      ? (this.paged?.pager?.lookUpTexture.value.image.data as Uint32Array) 
-      : undefined;
 
       if (!ext1 || !ext2) {
         return;
@@ -1179,18 +1180,19 @@ export class SplatMesh extends SplatGenerator {
             buffer2[i4 + 1] = ext2[index4 + 1];
             buffer2[i4 + 2] = ext2[index4 + 2];
             buffer2[i4 + 3] = ext2[index4 + 3];
+          }
+        }
 
-            if (labels !== undefined && labelsLookUp !== undefined) {
-              const label = labels[index];
-              const visible = labelsLookUp[label] > 0;
-              if (!visible) {
-                buffer[i4 + 3] = 0;
-              }
+        if (labels !== undefined && labelsLookUp !== undefined) {
+          for (let i = 0; i < count; ++i) {
+            const index = indices ? indices[base + i] : base + i;
+            if (labelsLookUp[labels[index]] === 0) {
+              buffer[i * 4 + 3] = 0;
             }
           }
         }
 
-        const newIntersections = raycast_ext_buffers(
+        const profiles = raycast_ext_buffers(
           origin.x,
           origin.y,
           origin.z,
@@ -1198,33 +1200,41 @@ export class SplatMesh extends SplatGenerator {
           direction.y,
           direction.z,
           this.minRaycastOpacity,
-          near,
-          far,
           count,
+          projection,
         );
-
-        intersections = this.appendRaycastBuffer(
-          intersections,
-          newIntersections,
-        );
+        samples = this.appendRaycastBuffer(samples, profiles, get_raycast_indices(), base, indices);
       }
     }
 
-    const cs = toContributions(SplatMesh.raycastBuffer.subarray(0, intersections));
-    const distance = medianDepth(cs, near, far);
-    if ( distance === null ) return;
-
-    const point = ray.direction.clone().multiplyScalar(distance).add(ray.origin);
-    intersects.push({
-      distance,
-      point,
-      object: this,
-    });
+    const distance = raycast_surface_depth(
+      SplatMesh.raycastBuffer.subarray(0, samples),
+      near,
+      far,
+    );
+    if (distance !== undefined) {
+      const point = ray.direction
+        .clone()
+        .multiplyScalar(distance)
+        .add(ray.origin);
+      intersects.push({
+        distance,
+        point,
+        object: this,
+        index: SplatMesh.raycastSplatIndices[raycast_surface_index(
+          SplatMesh.raycastBuffer.subarray(0, samples), distance,
+        )],
+      });
+    }
   }
 
   static raycastBuffer = new Float32Array(1024);
+  static raycastSplatIndices = new Uint32Array(342);
 
-  private appendRaycastBuffer(count: number, additional: Float32Array) {
+  private appendRaycastBuffer(
+    count: number, additional: Float32Array, sourceIndices: Uint32Array,
+    base: number, indices: Uint32Array | null,
+  ) {
     const total = count + additional.length;
     let capacity = SplatMesh.raycastBuffer.length;
 
@@ -1235,8 +1245,15 @@ export class SplatMesh extends SplatGenerator {
       const newBuffer = new Float32Array(capacity);
       newBuffer.set(SplatMesh.raycastBuffer.subarray(0, count));
       SplatMesh.raycastBuffer = newBuffer;
+      const newIndices = new Uint32Array(Math.ceil(capacity / 3));
+      newIndices.set(SplatMesh.raycastSplatIndices.subarray(0, count / 3));
+      SplatMesh.raycastSplatIndices = newIndices;
     }
 
+    for (let index = 0; index < sourceIndices.length; index++) {
+      const source = base + sourceIndices[index];
+      SplatMesh.raycastSplatIndices[count / 3 + index] = indices ? indices[source] : source;
+    }
     SplatMesh.raycastBuffer.set(additional, count);
     return count + additional.length;
   }

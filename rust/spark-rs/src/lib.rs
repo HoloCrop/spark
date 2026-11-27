@@ -11,7 +11,9 @@ use crate::ext_splats::ExtSplatsData;
 use crate::{decoder::ChunkDecoder, packed_splats::PackedSplatsData};
 
 mod raycast;
-use raycast::{raycast_packed_ellipsoids, raycast_ext_ellipsoids};
+mod raycast_blocks;
+use raycast::{RaycastProjection, raycast_packed_ellipsoids, raycast_ext_ellipsoids};
+mod surface_depth;
 
 mod sort;
 use sort::{sort_internal, SortBuffers, sort32_internal, Sort32Buffers};
@@ -479,35 +481,42 @@ pub fn bhatt_lod_extsplats(num_splats: u32, ext1: Uint32Array, ext2: Uint32Array
     gs.to_extsplats_lod()
 }
 
-const RAYCAST_BUFFER_COUNT: usize = 2 * 65536;
+const RAYCAST_BUFFER_COUNT: usize = 65536;
 
 thread_local! {
-    static RAYCAST_BUFFERS: RefCell<(Vec<u32>, Vec<u32>, Vec<f32>)> = RefCell::new((vec![0; RAYCAST_BUFFER_COUNT * 4], vec![0; RAYCAST_BUFFER_COUNT * 4], vec![0.0; RAYCAST_BUFFER_COUNT]));
+    static RAYCAST_BUFFERS: RefCell<(Vec<u32>, Vec<u32>, Vec<f32>, Vec<u32>)> = RefCell::new((vec![0; RAYCAST_BUFFER_COUNT * 4], vec![0; RAYCAST_BUFFER_COUNT * 4], vec![0.0; RAYCAST_BUFFER_COUNT * 3], vec![0; RAYCAST_BUFFER_COUNT]));
 }
 
 #[wasm_bindgen]
 pub fn get_raycast_buffer() -> Uint32Array {
-    RAYCAST_BUFFERS.with_borrow_mut(|(buffer, _, _)| {
+    RAYCAST_BUFFERS.with_borrow_mut(|(buffer, _, _, _)| {
         unsafe { Uint32Array::view(&buffer) }
     })
 }
 
 #[wasm_bindgen]
 pub fn get_raycast_buffer2() -> Uint32Array {
-    RAYCAST_BUFFERS.with_borrow_mut(|(_, buffer, _)| {
+    RAYCAST_BUFFERS.with_borrow_mut(|(_, buffer, _, _)| {
         unsafe { Uint32Array::view(&buffer) }
     })
+}
+
+#[wasm_bindgen]
+pub fn get_raycast_indices() -> Uint32Array {
+    RAYCAST_BUFFERS.with_borrow(|(_, _, _, indices)| unsafe { Uint32Array::view(indices) })
 }
 
 #[wasm_bindgen]
 pub fn raycast_packed_buffer(
     origin_x: f32, origin_y: f32, origin_z: f32,
     dir_x: f32, dir_y: f32, dir_z: f32,
-    min_opacity: f32, near: f32, far: f32,
+    min_opacity: f32,
     count: u32,
     ln_scale_min: f32, ln_scale_max: f32, lod_opacity: bool,
+    camera_from_mesh: Option<Float32Array>,
 ) -> Float32Array {
-    RAYCAST_BUFFERS.with_borrow_mut(|(buffer, _, distances)| {
+    let projection = raycast_projection(camera_from_mesh);
+    RAYCAST_BUFFERS.with_borrow_mut(|(buffer, _, samples, indices)| {
         let encoding = SplatEncoding {
             ln_scale_min,
             ln_scale_max,
@@ -515,15 +524,16 @@ pub fn raycast_packed_buffer(
             ..Default::default()
         };
 
-        distances.clear();
+        samples.clear();
+        indices.clear();
         let subbuffer = &buffer[0..(4 * count as usize)];
         raycast_packed_ellipsoids(
-            subbuffer, distances,
+            subbuffer, samples, indices,
             [origin_x, origin_y, origin_z], [dir_x, dir_y, dir_z],
-            min_opacity, near, far, &encoding,
+            min_opacity, &encoding, projection.as_ref(),
         );
 
-        unsafe { Float32Array::view(&distances) }
+        unsafe { Float32Array::view(&samples) }
     })
 }
 
@@ -531,21 +541,58 @@ pub fn raycast_packed_buffer(
 pub fn raycast_ext_buffers(
     origin_x: f32, origin_y: f32, origin_z: f32,
     dir_x: f32, dir_y: f32, dir_z: f32,
-    min_opacity: f32, near: f32, far: f32,
+    min_opacity: f32,
     count: u32,
+    camera_from_mesh: Option<Float32Array>,
 ) -> Float32Array {
-    RAYCAST_BUFFERS.with_borrow_mut(|(buffer, buffer2, distances)| {
-        distances.clear();
+    let projection = raycast_projection(camera_from_mesh);
+    RAYCAST_BUFFERS.with_borrow_mut(|(buffer, buffer2, samples, indices)| {
+        samples.clear();
+        indices.clear();
         let subbuffer = &buffer[0..(4 * count as usize)];
         let subbuffer2 = &buffer2[0..(4 * count as usize)];
         raycast_ext_ellipsoids(
-            subbuffer, subbuffer2, distances,
+            subbuffer, subbuffer2, samples, indices,
             [origin_x, origin_y, origin_z], [dir_x, dir_y, dir_z],
-            min_opacity, near, far,
+            min_opacity, projection.as_ref(),
         );
 
-        unsafe { Float32Array::view(&distances) }
+        unsafe { Float32Array::view(&samples) }
     })
+}
+
+fn raycast_projection(camera_from_mesh: Option<Float32Array>) -> Option<RaycastProjection> {
+    camera_from_mesh.map(|basis| {
+        let values = std::array::from_fn(|index| {
+            f64::from(basis.get_index(index as u32)) * if index % 3 == 2 { -1.0 } else { 1.0 }
+        });
+        RaycastProjection {
+            camera_from_mesh: glam::DMat3::from_cols_array(&values),
+            near: f64::from(basis.get_index(9)),
+            far: f64::from(basis.get_index(10)),
+            image_from_camera: std::array::from_fn(|index| f64::from(basis.get_index(11 + index as u32))),
+        }
+    })
+}
+
+#[wasm_bindgen]
+pub fn raycast_surface_depth(samples: Float32Array, near: f32, far: f32) -> Option<f32> {
+    sample_surface_depth(&samples.to_vec(), near, far)
+}
+
+fn sample_profiles(samples: &[f32]) -> Vec<surface_depth::RayProfile> {
+    samples.chunks_exact(3).map(|sample| surface_depth::RayProfile {
+        depth: sample[0], alpha: sample[1], sigma: sample[2],
+    }).collect()
+}
+
+fn sample_surface_depth(samples: &[f32], near: f32, far: f32) -> Option<f32> {
+    surface_depth::surface_depth(&sample_profiles(samples), near, far)
+}
+
+#[wasm_bindgen]
+pub fn raycast_surface_index(samples: Float32Array, depth: f32) -> u32 {
+    surface_depth::surface_contributor(&sample_profiles(&samples.to_vec()), depth) as u32
 }
 
 #[wasm_bindgen]
@@ -556,7 +603,7 @@ pub fn raycast_packed_splats(
     num_splats: u32, packed_splats: Uint32Array,
     ln_scale_min: f32, ln_scale_max: f32, lod_opacity: bool,
 ) -> Float32Array {
-    let mut distances = Vec::<f32>::new();
+    let mut samples = Vec::<f32>::new();
     let encoding = SplatEncoding {
         ln_scale_min,
         ln_scale_max,
@@ -564,7 +611,7 @@ pub fn raycast_packed_splats(
         ..Default::default()
     };
 
-    _ = RAYCAST_BUFFERS.with_borrow_mut(|(buffer, _, _)| {
+    _ = RAYCAST_BUFFERS.with_borrow_mut(|(buffer, _, _, indices)| {
         let mut base = 0;
         while base < num_splats {
             let chunk_size = (RAYCAST_BUFFER_COUNT as u32).min(num_splats - base);
@@ -572,19 +619,19 @@ pub fn raycast_packed_splats(
             let subbuffer = &mut buffer[0..(4 * chunk_size as usize)];
             subarray.copy_to(subbuffer);
 
+            indices.clear();
             raycast_packed_ellipsoids(
-                subbuffer, &mut distances,
+                subbuffer, &mut samples, indices,
                 [origin_x, origin_y, origin_z], [dir_x, dir_y, dir_z],
-                min_opacity, near, far, &encoding,
+                min_opacity, &encoding, None,
             );
 
             base += chunk_size;
         }
     });
 
-    let output = Float32Array::new_with_length(distances.len() as u32);
-    output.copy_from(&distances);
-    output
+    let depth = sample_surface_depth(&samples, near, far);
+    Float32Array::from(depth.as_slice())
 }
 
 #[wasm_bindgen]

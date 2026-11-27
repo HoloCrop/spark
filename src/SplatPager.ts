@@ -9,8 +9,6 @@ import type { SplatSource } from "./SplatMesh";
 import { workerPool } from "./SplatWorker";
 import {
   DEFAULT_SPLAT_ENCODING,
-  type ExtResult,
-  type PackedResult,
   type RadMeta,
   type SplatEncoding,
   SplatFileType,
@@ -23,6 +21,8 @@ import {
   uploadU32DataTextureRows,
 } from "./utils";
 import * as wasm from "./wasm";
+import { SplatRaycastBlocks } from "./SplatRaycastBlocks";
+import type { PagedExtResult, PagedPackedResult } from "./PagedSplatResult";
 
 export interface PagedSplatsOptions {
   pager?: SplatPager;
@@ -246,14 +246,13 @@ export class PagedSplats implements SplatSource {
         throw new Error("PagedSplats.pager not set");
       }
       if (!this.pager.extSplats) {
-        const result = (await worker.call("loadPackedSplats", {
+        const lodSplats = (await worker.call("loadPagedPackedSplats", {
           fileBytes: decodeBytes,
           pathName: this.chunkUrl(chunk),
           sh1Codes: this.sh1Codes?.slice(),
           sh2Codes: this.sh2Codes?.slice(),
           sh3Codes: this.sh3Codes?.slice(),
-        })) as { lodSplats: PackedResult };
-        const lodSplats = result.lodSplats;
+        })) as PagedPackedResult;
         if (!this.splatEncoding) {
           this.splatEncoding = lodSplats.splatEncoding;
 
@@ -287,7 +286,7 @@ export class PagedSplats implements SplatSource {
       }
 
       const sh3Codes = this.sh3Codes as [Uint32Array, Uint32Array] | undefined;
-      const result = (await worker.call("loadExtSplats", {
+      const lodSplats = (await worker.call("loadPagedExtSplats", {
         fileBytes: decodeBytes,
         pathName: this.chunkUrl(chunk),
         sh1Codes: this.sh1Codes?.slice(),
@@ -295,8 +294,7 @@ export class PagedSplats implements SplatSource {
         sh3Codes: sh3Codes
           ? [sh3Codes[0].slice(), sh3Codes[1].slice()]
           : undefined,
-      })) as { lodSplats: ExtResult };      
-      const lodSplats = result.lodSplats;
+      })) as PagedExtResult;
 
       if (!this.splatEncoding) {
         this.splatEncoding = DEFAULT_SPLAT_ENCODING;
@@ -508,6 +506,7 @@ interface PageUpload {
   page: number;
   numSplats: number;
   packedArray: Uint32Array;
+  raycastBounds: Float32Array;
   extArray?: Uint32Array;
   shArrays: Array<Uint32Array>;
   labels?: Uint32Array;
@@ -515,6 +514,7 @@ interface PageUpload {
 }
 
 export class SplatPager {
+  readonly raycastBlocks = new SplatRaycastBlocks();
   readonly renderer: THREE.WebGLRenderer;
 
   readonly extSplats: boolean;
@@ -554,7 +554,7 @@ export class SplatPager {
   fetched: {
     splats: PagedSplats;
     chunk: number;
-    data: PackedResult | ExtResult;
+    data: PagedPackedResult | PagedExtResult;
   }[];
   fetchPriority: { splats: PagedSplats; chunk: number }[];
 
@@ -927,6 +927,7 @@ export class SplatPager {
   dispose() {
     this.autoDrive = false;
     this.numFetchers = 0;
+    this.raycastBlocks.dispose();
 
     this.packedTexture.value.dispose();
     this.packedTexture.value.source.data = null;
@@ -989,6 +990,8 @@ export class SplatPager {
     texture.type = type;
     texture.internalFormat = internalFormat;
     texture.needsUpdate = true;
+    // Allocate zeroed GPU storage; streamed pages publish only their changed layers.
+    texture.source.dataReady = false;
     this.renderer.initTexture(texture);
     return texture;
   }
@@ -1029,7 +1032,8 @@ export class SplatPager {
     const emptyShTextures = this.extSplats
       ? SplatPager.emptyExtShTextures
       : SplatPager.emptyShTextures;
-    for (let i = 0; i < this.curSh; i++) {
+    const numTextures = this.curSh + (this.extSplats && this.curSh === 3 ? 1 : 0);
+    for (let i = 0; i < numTextures; i++) {
       if (this.shTextures[i].value === emptyShTextures[i]) {
         const elementsPerSplat =
           this.shTextures[i].value === SplatPager.emptyUint32x2 ? 2 : 4;
@@ -1101,6 +1105,7 @@ export class SplatPager {
       this.splatsChunkToPage.delete(splats);
     }
 
+    this.raycastBlocks.remove(page);
     this.pageToSplatsChunk[page] = undefined;
     while (
       this.pageToSplatsChunk.length > 0 &&
@@ -1122,6 +1127,7 @@ export class SplatPager {
       const chunk = chunks.pop();
       if (chunk) {
         const { page } = chunk;
+        this.raycastBlocks.remove(page);
         this.pageToSplatsChunk[page] = undefined;
         freedPages.add(page);
         this.pageFreelist.push(page);
@@ -1137,6 +1143,7 @@ export class SplatPager {
   private uploadPage(
     page: number,
     packedArray: Uint32Array,
+    raycastBounds: Float32Array,
     shArrays: Array<Uint32Array>,
     extArray?: Uint32Array,
     labels?: Uint32Array,
@@ -1149,26 +1156,19 @@ export class SplatPager {
     if (extArray) {
       uploadTextureLayer(this.extTexture, page, pageBase * 4, extArray);
     }
+    this.raycastBlocks.install(this, page, raycastBounds);
 
     // In case of extSplats there can be 4 shArrays for 3 sh degrees
     const numSh = Math.min(shArrays.length, 3);
     this.ensureShTextures(numSh);
     if ( labels !== undefined ) {
       this.ensureLabelTextures();
-      const labels_arr = labels as Uint32Array<ArrayBuffer>;
-      const array = this.labelTexture.value.image.data;
-      array.subarray(pageBase, pageBase + labels_arr.length).set(labels_arr);
-      this.labelTexture.value.addLayerUpdate(page);
-      this.labelTexture.value.needsUpdate = true;
+      uploadTextureLayer(this.labelTexture, page, pageBase, labels);
     }
 
     if ( instances !== undefined ) {
       this.ensureInstanceTextures();
-      const instances_arr = instances as Uint32Array<ArrayBuffer>;
-      const array = this.instanceTexture.value.image.data;
-      array.subarray(pageBase, pageBase + instances_arr.length).set(instances_arr);
-      this.instanceTexture.value.addLayerUpdate(page);
-      this.instanceTexture.value.needsUpdate = true;
+      uploadTextureLayer(this.instanceTexture, page, pageBase, instances);
     }
 
     for (let i = 0; i < shArrays.length; i++) {
@@ -1342,7 +1342,7 @@ export class SplatPager {
         page,
         chunk,
         numSplats,
-        lodTree: extra.lodTree as Uint32Array,
+        lodTree: extra.lodTree,
       });
 
       if (isExtResult(data, this.extSplats)) {
@@ -1355,11 +1355,12 @@ export class SplatPager {
           data.extra.sh3a as Uint32Array,
           data.extra.sh3b as Uint32Array,
         ];
-        shArrays.length = shArrays.findIndex((sh) => !sh);
+        shArrays.length = shArrays.filter(Boolean).length;
         this.newUploads.push({
           page,
           numSplats,
           packedArray,
+          raycastBounds: data.raycastBounds,
           extArray,
           shArrays,
           labels: extra?.labels,
@@ -1372,11 +1373,12 @@ export class SplatPager {
           data.extra.sh2 as Uint32Array,
           data.extra.sh3 as Uint32Array,
         ];
-        shArrays.length = shArrays.findIndex((sh) => !sh);
+        shArrays.length = shArrays.filter(Boolean).length;
         this.newUploads.push({
           page,
           numSplats,
           packedArray,
+          raycastBounds: data.raycastBounds,
           shArrays,
         });
       }
@@ -1389,8 +1391,8 @@ export class SplatPager {
       if (!upload) {
         break;
       }
-      const { page, numSplats, packedArray, extArray, shArrays, labels, instances } = upload;
-      this.uploadPage(page, packedArray, shArrays, extArray, labels, instances);
+      const { page, packedArray, raycastBounds, extArray, shArrays, labels, instances } = upload;
+      this.uploadPage(page, packedArray, raycastBounds, shArrays, extArray, labels, instances);
     }
   }
 
@@ -1463,9 +1465,9 @@ export class SplatPager {
 
 // Convenience function to distinguish ExtResult and PackedResult
 function isExtResult(
-  data: ExtResult | PackedResult,
+  data: PagedExtResult | PagedPackedResult,
   extSplats: boolean,
-): data is ExtResult {
+): data is PagedExtResult {
   return extSplats;
 }
 

@@ -8,6 +8,7 @@ import {
   SplatGenerator,
 } from "./SplatGenerator";
 import { SplatMesh } from "./SplatMesh";
+import { SplatProgramMode, SplatProgramRegistry } from "./SplatProgramRegistry";
 import {
   LN_SCALE_MAX,
   LN_SCALE_MIN,
@@ -72,6 +73,8 @@ export class SplatAccumulator {
   mappingVersion = -1;
   extSplats: boolean;
   covSplats: boolean;
+  readonly programs: SplatProgramRegistry;
+  private readonly ownsPrograms: boolean;
   readback: Readback | null = null;
   readbackSplats: DynoUsampler2DArray<"extSplats", THREE.DataArrayTexture>[] =
     [];
@@ -79,15 +82,23 @@ export class SplatAccumulator {
   constructor({
     extSplats,
     covSplats,
-  }: { extSplats?: boolean; covSplats?: boolean } = {}) {
+    programs,
+  }: { extSplats?: boolean; covSplats?: boolean; programs?: SplatProgramRegistry } = {}) {
     if (!threeMrtArray) {
       throw new Error("Spark requires THREE.js r179 or above");
     }
     this.extSplats = extSplats ?? true;
     this.covSplats = covSplats ?? false;
+    this.programs = programs ?? new SplatProgramRegistry();
+    this.ownsPrograms = programs === undefined;
   }
 
   dispose() {
+    this.disposeTarget();
+    if (this.ownsPrograms) this.programs.dispose();
+  }
+
+  private disposeTarget() {
     if (this.target) {
       this.target.dispose();
       this.target = null;
@@ -147,7 +158,7 @@ export class SplatAccumulator {
     if (this.target && (maxSplats ?? 1) <= this.maxSplats) {
       return false;
     }
-    this.dispose();
+    this.disposeTarget();
 
     // The packed Gsplats are stored in a 2D array texture of max size
     // 2048 x 2048 x 2048, one RGBA32UI pixel = 4 uint32 = one Gsplat
@@ -223,8 +234,10 @@ export class SplatAccumulator {
       throw new Error("Either generator or covGenerator must be provided");
     }
 
-    let program = SplatAccumulator.generatorProgram.get(theGenerator);
-    if (!program) {
+    const mode = this.extSplats
+      ? this.covSplats ? SplatProgramMode.ExtendedCovariance : SplatProgramMode.Extended
+      : this.covSplats ? SplatProgramMode.PackedCovariance : SplatProgramMode.Packed;
+    const program = this.programs.get(theGenerator, mode, () => {
       const graph = dynoBlock(
         { index: "int" },
         {},
@@ -334,7 +347,7 @@ export class SplatAccumulator {
           return undefined;
         },
       );
-      program = new DynoProgram({
+      return new DynoProgram({
         graph,
         inputs: { index: "_index" },
         outputs: {},
@@ -343,9 +356,7 @@ export class SplatAccumulator {
           : SplatAccumulator.programTemplate,
         // consoleLog: true,
       });
-
-      SplatAccumulator.generatorProgram.set(theGenerator, program);
-    }
+    });
     Object.assign(program.uniforms, {
       targetLayer: { value: 0 },
       targetBase: { value: 0 },
@@ -353,7 +364,6 @@ export class SplatAccumulator {
     });
 
     const material = program.prepareMaterial();
-    SplatAccumulator.fullScreenQuad.material = material;
     return { program, material };
   }
 
@@ -363,10 +373,6 @@ export class SplatAccumulator {
   static programTemplate = new DynoProgramTemplate(
     getShaders().computeUvec4Vec4Template,
   );
-  static generatorProgram = new WeakMap<
-    GsplatGenerator | CovSplatGenerator,
-    DynoProgram
-  >();
   static fullScreenQuad = new FullScreenQuad(
     new THREE.RawShaderMaterial({ visible: false }),
   );
@@ -407,34 +413,40 @@ export class SplatAccumulator {
     material.uniforms.targetBase.value = base;
     material.uniforms.targetCount.value = count;
 
-    // Keep generating layers until we've reached the next generation's base
-    while (base < nextBase) {
-      const layer = Math.floor(base / layerSize);
-      material.uniforms.targetLayer.value = layer;
+    const quad = SplatAccumulator.fullScreenQuad;
+    const previousMaterial = quad.material;
+    quad.material = material;
+    try {
+      // Keep generating layers until we've reached the next generation's base
+      while (base < nextBase) {
+        const layer = Math.floor(base / layerSize);
+        material.uniforms.targetLayer.value = layer;
 
-      const layerBase = layer * layerSize;
-      const layerYStart = Math.floor((base - layerBase) / SPLAT_TEX_WIDTH);
-      const layerYEnd = Math.min(
-        SPLAT_TEX_HEIGHT,
-        Math.ceil((nextBase - layerBase) / SPLAT_TEX_WIDTH),
-      );
+        const layerBase = layer * layerSize;
+        const layerYStart = Math.floor((base - layerBase) / SPLAT_TEX_WIDTH);
+        const layerYEnd = Math.min(
+          SPLAT_TEX_HEIGHT,
+          Math.ceil((nextBase - layerBase) / SPLAT_TEX_WIDTH),
+        );
 
-      // Render the desired portion of the layer
-      this.target.scissor.set(
-        0,
-        layerYStart,
-        SPLAT_TEX_WIDTH,
-        layerYEnd - layerYStart,
-      );
-      renderer.setRenderTarget(this.target, layer);
-      renderer.xr.enabled = false;
-      renderer.autoClear = false;
-      SplatAccumulator.fullScreenQuad.render(renderer);
+        // Render the desired portion of the layer
+        this.target.scissor.set(
+          0,
+          layerYStart,
+          SPLAT_TEX_WIDTH,
+          layerYEnd - layerYStart,
+        );
+        renderer.setRenderTarget(this.target, layer);
+        renderer.xr.enabled = false;
+        renderer.autoClear = false;
+        quad.render(renderer);
 
-      base += SPLAT_TEX_WIDTH * (layerYEnd - layerYStart);
+        base += SPLAT_TEX_WIDTH * (layerYEnd - layerYStart);
+      }
+    } finally {
+      quad.material = previousMaterial;
+      this.resetRenderState(renderer, renderState);
     }
-
-    this.resetRenderState(renderer, renderState);
     return { nextBase };
   }
 
@@ -471,8 +483,10 @@ export class SplatAccumulator {
     this.deltaTime = time - previous.time;
 
     const allGenerators: SplatGenerator[] = [];
+    const residentGenerators: SplatGenerator[] = [];
     scene.traverse((node) => {
       if (node instanceof SplatGenerator) {
+        residentGenerators.push(node);
         if (!camera.layers || camera.layers.test(node.layers)) {
           allGenerators.push(node);
         }
@@ -517,6 +531,8 @@ export class SplatAccumulator {
         object.generatorError = error;
       }
     }
+
+    this.programs.retain(residentGenerators);
 
     const visibleGenerators: SplatGenerator[] = [];
     scene.traverseVisible((node) => {
