@@ -1,7 +1,11 @@
-import { ExtSplats, PackedSplats, PagedSplats, SplatMesh, SplatPager } from '.';
-import { SplatAccumulator } from './SplatAccumulator';
-import { SplatWorker } from './SplatWorker';
 import * as THREE from "three";
+import { ExtSplats } from "./ExtSplats";
+import { PackedSplats } from "./PackedSplats";
+import { PagedSplats } from "./PagedSplats";
+import { SplatAccumulator } from "./SplatAccumulator";
+import { SplatMesh } from "./SplatMesh";
+import { SplatPager } from "./SplatPager";
+import { SplatWorker } from "./SplatWorker";
 export interface SparkRendererOptions {
     /**
      * Pass in your THREE.WebGLRenderer instance so Spark can perform work
@@ -12,7 +16,9 @@ export interface SparkRendererOptions {
     renderer: THREE.WebGLRenderer;
     /**
      * Callback function to be called when SparkRenderer needs to re-render,
-     * for example when splat sort order or LoD updates complete.
+     * for example when splat sort order or LoD updates complete. May fire
+     * several times per frame; schedule a single render rather than rendering
+     * inside the callback.
      */
     onDirty?: () => void;
     /**
@@ -21,11 +27,10 @@ export interface SparkRendererOptions {
      */
     premultipliedAlpha?: boolean;
     /**
-     * Pass in a THREE.Clock to synchronize time-based effects across different
-     * systems. Alternatively, you can set the property time directly.
-     * (default: new THREE.Clock)
+     * Pass in a THREE.Timer to to synchronize time-based effects across different
+     * systems.
      */
-    clock?: THREE.Clock;
+    timer?: THREE.Timer;
     /**
      * Controls whether to check and automatically update Gsplat collection
      * each frame render.
@@ -202,6 +207,14 @@ export interface SparkRendererOptions {
      */
     numLodFetchers?: number;
     /**
+     * How long (ms) a LoD SplatMesh can go unrendered (hidden or removed from the
+     * scene) before its LoD state is released: the worker-side tree is dropped and,
+     * for paged meshes, its resident pages are freed for other meshes. Rendering it
+     * again rebuilds the tree and refetches pages. Set to Infinity to never release.
+     * @default 3000
+     */
+    lodCleanupTimeoutMs?: number;
+    /**
      * Full-width angle in degrees of fixed foveation cone along the view direction
      * with no foveation applied (full resolution, foveate=1.0). Set to 0 to disable.
      * @default 90.0
@@ -325,10 +338,10 @@ export declare class SparkRenderer extends THREE.Mesh {
     focalAdjustment: number;
     sortRadial: boolean;
     minSortIntervalMs: number;
-    clock: THREE.Clock;
-    time?: number;
+    readonly timer: THREE.Timer;
+    private readonly ownsTimer;
     lastFrame: number;
-    updateTimeoutId: number;
+    updateTimeoutId: ReturnType<typeof setTimeout> | undefined;
     onDirty?: () => void;
     dirty: boolean;
     orderingTexture: THREE.DataTexture | null;
@@ -338,16 +351,18 @@ export declare class SparkRenderer extends THREE.Mesh {
     current: SplatAccumulator;
     accumulators: SplatAccumulator[];
     private readonly programs;
+    private isDisposed;
     sorting: boolean;
     sortDirty: boolean;
+    private latestMappingVersion;
     lastSortTime: number;
     sortWorker: SplatWorker | null;
-    sortTimeoutId: number;
+    sortTimeoutId: ReturnType<typeof setTimeout> | undefined;
     sortedCenter: THREE.Vector3;
     sortedDir: THREE.Vector3;
     readback32: Uint32Array<ArrayBuffer>;
     private depthReadback?;
-    private disposed;
+    private readonly initWatched;
     enableLod: boolean;
     enableDriveLod: boolean;
     enableLodFetching: boolean;
@@ -359,6 +374,7 @@ export declare class SparkRenderer extends THREE.Mesh {
     pagedExtSplats: boolean;
     maxPagedSplats: number;
     numLodFetchers: number;
+    lodCleanupTimeoutMs: number;
     behindFoveate: number;
     coneFov0: number;
     coneFov: number;
@@ -379,6 +395,7 @@ export declare class SparkRenderer extends THREE.Mesh {
     }>;
     lodIdToSplats: Map<number, PackedSplats | ExtSplats | PagedSplats>;
     lodInitQueue: (PackedSplats | ExtSplats | PagedSplats)[];
+    private lodInitFailed;
     lastLod?: {
         pos: THREE.Vector3;
         quat: THREE.Quaternion;
@@ -520,6 +537,7 @@ export declare class SparkRenderer extends THREE.Mesh {
         };
     };
     dispose(): void;
+    private dropErrorIfDisposed;
     setDirty(): void;
     onBeforeRender(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera): void;
     clearSplats(): void;
@@ -533,6 +551,8 @@ export declare class SparkRenderer extends THREE.Mesh {
     private ensureLodWorker;
     defaultSplatTarget(): 500000 | 750000 | 1000000 | 1500000 | 2500000;
     private driveLod;
+    /** Body of the LoD update, run with exclusive access to the LoD worker. */
+    private driveLodExclusive;
     private initLodTree;
     private pageSizeWarning;
     private updateLodInstances;

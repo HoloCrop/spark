@@ -1,5 +1,5 @@
-import { CovSplatGenerator, GsplatGenerator, SplatGenerator } from './SplatGenerator';
-import { DynoProgram } from './dyno/program';
+import type { CovSplatGenerator, GsplatGenerator, SplatGenerator } from "./SplatGenerator";
+import type { DynoProgram } from "./dyno/program";
 export declare enum SplatProgramMode {
     Packed = 0,
     PackedCovariance = 1,

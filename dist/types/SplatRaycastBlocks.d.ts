@@ -1,4 +1,4 @@
-import { SplatPager } from './SplatPager';
+import type { SplatPager } from "./SplatPager";
 export declare class SplatRaycastBlocks {
     private index?;
     private pendingPages;
