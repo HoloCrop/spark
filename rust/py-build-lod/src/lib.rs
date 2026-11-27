@@ -1,8 +1,11 @@
+mod trained;
 use pyo3::prelude::*;
 
 
 #[pymodule]
 mod py_build_lod {
+    #[pymodule_export]
+    use crate::trained::{TrainedLevel, encode_trained_arrays, encode_trained_archive};
     use pyo3::prelude::*;
     use pyo3::exceptions::PyValueError;
     use spark_lib::decoder::SplatGetter;
@@ -44,6 +47,15 @@ mod py_build_lod {
         })
     }
 
+
+    #[pyfunction]
+    fn encode_trained_rad(directory: &str, output_dir: &str, levels: usize,
+                          moment_factor: f32) -> PyResult<()> {
+        spark_lib::trained_lod::encode_levels(
+            std::path::Path::new(directory), std::path::Path::new(output_dir),
+            levels, moment_factor,
+        ).map_err(|error| PyValueError::new_err(error.to_string()))
+    }
 
     #[pyfunction]
     fn encode_rad(input_file: &str, output_dir: &str) -> PyResult<()> {

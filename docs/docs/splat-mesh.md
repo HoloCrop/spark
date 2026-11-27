@@ -32,7 +32,7 @@ const splats = new SplatMesh({
   editable?: boolean;
   // Controls whether SplatMesh participates in Three.js raycasting (default: true)
   raycastable?: boolean;
-  // Minimum opacity for raycasting splats. (default: 0.2)
+  // Minimum k=2 Gaussian response along the ray. (default: 0.2)
   minRaycastOpacity?: number;
   // Frame callback to update mesh. Call mesh.updateVersion() if we need to re-generate
   onFrame?: ({
@@ -92,7 +92,7 @@ Constructor callbacks include `constructSplats` (procedural creation), `onProgre
 | **onLoad** | `(mesh: SplatMesh) => Promise<void> | void` callback fired when initialization is complete. (default: `undefined`) |
 | **editable** | `boolean` toggle controlling whether `SplatEdit`s have any effect on this mesh. (default: `true`) |
 | **raycastable** | `boolean` controls whether this `SplatMesh` participates in Three.js raycasting. (default: `true`) |
-| **minRaycastOpacity** | `number` minimum opacity for raycasting splats. (default: `0.2`) |
+| **minRaycastOpacity** | `number` minimum k=2 Gaussian response along the ray. (default: `0.2`) |
 | **onFrame** | `({ mesh, time, deltaTime }) => void` per-frame callback for dynamic updates. Call `mesh.updateVersion()` when changes require splat re-generation. (default: `undefined`) |
 | **objectModifiers** | `GsplatModifier[]` object-space modifiers applied in sequence before transforms. (default: `undefined`) |
 | **worldModifiers** | `GsplatModifier[]` world-space modifiers applied in sequence after transforms. (default: `undefined`) |
@@ -166,7 +166,13 @@ This is called automatically by `SparkRenderer` and you should not have to call 
 
 ## `raycast(raycaster, intersects: { distance, point, object}[])`
 
-This method conforms to the standard `THREE.Raycaster` API, performing object-ray intersections using this method to populate the provided `intersects[]` array with each intersection point's `distance: number`, `point: THREE.Vector3`, and `object: SplatMesh`. Note that this method is synchronous and uses a WebAssembly-based ray-splat intersection algorithm that iterates over all points. Raycasting against millions of splats have a noticeable delay, and should not be called every frame.
+This method conforms to the standard `THREE.Raycaster` API, appending one surface hit's `distance: number`, `point: THREE.Vector3`, and `object: SplatMesh`. The WebAssembly raycaster evaluates the 3D generalized Gaussian with `k=2` along the ray. Each contributing Gaussian supplies a mean depth, depth sigma and alpha. Thin splats retain their actual scales; zero-opacity and hidden classes are excluded.
+
+Surface depth is the combined transmittance's `0.5` crossing, following [Geometry-Grounded Gaussian Splatting](https://arxiv.org/abs/2601.17835) and the `k=2` depth profile used in `triton_splatting`. A CPU bisection evaluates the product of the smooth, unoriented profiles after collecting all source chunks. As in Triton's surface definition, alpha is capped at `0.99`, and responses at or below `1/255` are excluded; `minRaycastOpacity` can require a stronger response. Depth sigma is measured in the world ray's distance units.
+
+There is no hit if the combined opacity never reaches `0.5` or the crossing lies outside `raycaster.near` and `far`. Gaussian means outside that interval are retained when their depth profiles contribute to a crossing inside it. Profiles wholly behind the ray origin are excluded.
+
+Raycasting operates on source splats and its own LOD selection, independently of rendered pixels, camera projection and screen-space blur. It is synchronous and iterates over the candidate splats. Raycasting millions of splats can have a noticeable delay and should not run every frame.
 
 Usage example:
 ```javascript

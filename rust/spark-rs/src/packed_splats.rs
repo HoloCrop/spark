@@ -397,6 +397,7 @@ impl SplatReceiver for PackedSplatsData {
                     let child_count = child_counts[base + i];
                     let child_start = child_starts[base + i];
                     encode_lod_tree(&mut buffer[i4..i4 + 4], &center, opacity, &scale, child_count, child_start);
+
                 }
                 lod_tree.subarray((base * 4) as u32, ((base + count) * 4) as u32).copy_from(buffer);
                 base += count;
@@ -733,6 +734,8 @@ impl SplatReceiver for PackedSplatsData {
             }
         }
     }
+
+
 
     fn set_child_count(&mut self, base: usize, count: usize, child_count: &[u16]) {
         if self.child_counts.is_none() {
