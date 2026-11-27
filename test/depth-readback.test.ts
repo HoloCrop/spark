@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ReadbackCancelledError, SplatDepthReadback, type ReadbackScheduler } from "../src/SplatDepthReadback";
+import {
+  ReadbackCancelledError,
+  type ReadbackScheduler,
+  SplatDepthReadback,
+} from "../src/SplatDepthReadback";
 
 type BufferStorage = { bytes: Uint8Array; deleted: boolean };
 type Fence = { deleted: boolean };
@@ -17,8 +21,16 @@ class ControlledScheduler implements ReadbackScheduler {
         signal.removeEventListener("abort", abort);
         this.pending.splice(this.pending.indexOf(task), 1);
       };
-      const task = { resume: () => { remove(); resolve(); } };
-      const abort = () => { remove(); reject(new ReadbackCancelledError()); };
+      const task = {
+        resume: () => {
+          remove();
+          resolve();
+        },
+      };
+      const abort = () => {
+        remove();
+        reject(new ReadbackCancelledError());
+      };
       this.pending.push(task);
       signal.addEventListener("abort", abort, { once: true });
       if (signal.aborted) abort();
@@ -26,7 +38,11 @@ class ControlledScheduler implements ReadbackScheduler {
   }
 
   async resume() {
-    assert.equal(this.pending.length, 1, "the readback owns only one pending task");
+    assert.equal(
+      this.pending.length,
+      1,
+      "the readback owns only one pending task",
+    );
     this.pending[0].resume();
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
   }
@@ -58,7 +74,9 @@ class ReadbackContext {
     this.buffers.push(buffer);
     return buffer;
   }
-  deleteBuffer(buffer: BufferStorage) { buffer.deleted = true; }
+  deleteBuffer(buffer: BufferStorage) {
+    buffer.deleted = true;
+  }
   bindBuffer(target: number, buffer: BufferStorage | null) {
     assert.equal(target, this.PIXEL_PACK_BUFFER);
     this.bound = buffer;
@@ -69,11 +87,13 @@ class ReadbackContext {
   }
   bufferData(target: number, length: number) {
     assert.equal(target, this.PIXEL_PACK_BUFFER);
-    this.bound!.bytes = new Uint8Array(length);
+    assert.ok(this.bound);
+    this.bound.bytes = new Uint8Array(length);
   }
   snapshotLayer(offset: number, source: Uint8Array) {
     this.events.push("layer");
-    this.bound!.bytes.set(source, offset);
+    assert.ok(this.bound);
+    this.bound.bytes.set(source, offset);
   }
   fenceSync() {
     this.events.push("fence");
@@ -81,16 +101,25 @@ class ReadbackContext {
     this.fences.push(fence);
     return fence;
   }
-  flush() { this.events.push("flush"); }
-  clientWaitSync() { return this.status; }
-  deleteSync(fence: Fence) { fence.deleted = true; }
-  isContextLost() { return this.lost; }
+  flush() {
+    this.events.push("flush");
+  }
+  clientWaitSync() {
+    return this.status;
+  }
+  deleteSync(fence: Fence) {
+    fence.deleted = true;
+  }
+  isContextLost() {
+    return this.lost;
+  }
   getBufferSubData(target: number, offset: number, destination: Uint8Array) {
     const length = destination.length;
     assert.equal(target, this.PIXEL_PACK_BUFFER);
-    assert.equal(this.bound!.deleted, false);
+    assert.ok(this.bound);
+    assert.equal(this.bound.deleted, false);
     this.copies.push({ offset, length });
-    destination.set(this.bound!.bytes.subarray(offset, offset + length));
+    destination.set(this.bound.bytes.subarray(offset, offset + length));
   }
 }
 
@@ -99,13 +128,18 @@ function fixture() {
   const context = new ReadbackContext(scheduler);
   const previous = context.createBuffer();
   context.bound = previous;
-  const readback = new SplatDepthReadback(context as unknown as WebGL2RenderingContext, scheduler);
+  const readback = new SplatDepthReadback(
+    context as unknown as WebGL2RenderingContext,
+    scheduler,
+  );
   return { scheduler, context, previous, readback };
 }
 
 async function finish(promise: Promise<void>, scheduler: ControlledScheduler) {
   let completed = false;
-  const settled = promise.finally(() => { completed = true; });
+  const settled = promise.finally(() => {
+    completed = true;
+  });
   await Promise.resolve();
   while (!completed) {
     await scheduler.resume();
@@ -123,11 +157,15 @@ test("depth readback transfers one complete layered snapshot after the fence and
   const storage = new Uint8Array(expected.length + 2).fill(199);
   const destination = storage.subarray(1, storage.length - 1);
   let completed = false;
-  const pending = readback.read(destination, () => {
-    assert.notEqual(context.bound, previous);
-    context.snapshotLayer(0, firstLayer);
-    context.snapshotLayer(firstLayer.length, secondLayer);
-  }).then(() => { completed = true; });
+  const pending = readback
+    .read(destination, () => {
+      assert.notEqual(context.bound, previous);
+      context.snapshotLayer(0, firstLayer);
+      context.snapshotLayer(firstLayer.length, secondLayer);
+    })
+    .then(() => {
+      completed = true;
+    });
 
   assert.deepEqual(context.events, ["layer", "layer", "fence", "flush", "gpu"]);
   assert.equal(context.bound, previous);
@@ -137,7 +175,11 @@ test("depth readback transfers one complete layered snapshot after the fence and
   context.status = context.TIMEOUT_EXPIRED;
   await scheduler.resume();
   assert.equal(context.copies.length, 0);
-  assert.equal(completed, false, "an unfinished GPU snapshot must not publish a sort input");
+  assert.equal(
+    completed,
+    false,
+    "an unfinished GPU snapshot must not publish a sort input",
+  );
   assert.equal(context.bound, previous);
 
   // Another renderer operation changes the binding while the GPU work is pending.
@@ -147,8 +189,11 @@ test("depth readback transfers one complete layered snapshot after the fence and
   await finish(pending, scheduler);
   assert.equal(context.bound, intervening);
   assert.deepEqual(destination, expected);
-  assert.deepEqual(context.copies, [{ offset: 0, length: destination.length }],
-    "each snapshot incurs only one synchronous driver transfer");
+  assert.deepEqual(
+    context.copies,
+    [{ offset: 0, length: destination.length }],
+    "each snapshot incurs only one synchronous driver transfer",
+  );
   assert.equal(storage[0], 199);
   assert.equal(storage[storage.length - 1], 199);
   assert.ok(context.fences.every((fence) => fence.deleted));
@@ -156,7 +201,10 @@ test("depth readback transfers one complete layered snapshot after the fence and
   const allocated = context.buffers.length;
   const replacement = new Uint8Array(17).fill(83);
   const next = new Uint8Array(replacement.length);
-  await finish(readback.read(next, () => context.snapshotLayer(0, replacement)), scheduler);
+  await finish(
+    readback.read(next, () => context.snapshotLayer(0, replacement)),
+    scheduler,
+  );
   assert.deepEqual(next, replacement);
   assert.equal(context.buffers.length, allocated);
   readback.dispose();
@@ -164,13 +212,19 @@ test("depth readback transfers one complete layered snapshot after the fence and
 
 test("an empty read completes without copying and leaves the reader reusable", async () => {
   const { scheduler, context, previous, readback } = fixture();
-  await finish(readback.read(new Uint8Array(), () => {}), scheduler);
+  await finish(
+    readback.read(new Uint8Array(), () => {}),
+    scheduler,
+  );
   assert.equal(context.copies.length, 0);
   assert.equal(context.bound, previous);
 
   const source = new Uint8Array(19).fill(113);
   const destination = new Uint8Array(source.length);
-  await finish(readback.read(destination, () => context.snapshotLayer(0, source)), scheduler);
+  await finish(
+    readback.read(destination, () => context.snapshotLayer(0, source)),
+    scheduler,
+  );
   assert.deepEqual(destination, source);
   readback.dispose();
 });
@@ -179,7 +233,9 @@ for (const phase of ["pending fence", "ready continuation"] as const) {
   test(`disposing during ${phase} cancels the readback without copying`, async () => {
     const { scheduler, context, previous, readback } = fixture();
     const destination = new Uint8Array(4 * 1024 * 1024);
-    const pending = readback.read(destination, () => context.snapshotLayer(0, destination));
+    const pending = readback.read(destination, () =>
+      context.snapshotLayer(0, destination),
+    );
     if (phase === "ready continuation") scheduler.pending[0].resume();
     const copied = context.copies.length;
     const rejected = assert.rejects(pending, ReadbackCancelledError);
@@ -191,7 +247,12 @@ for (const phase of ["pending fence", "ready continuation"] as const) {
     assert.ok(context.fences.every((fence) => fence.deleted));
     assert.equal(context.buffers[1].deleted, true);
     let snapshots = 0;
-    await assert.rejects(readback.read(destination, () => { snapshots++; }), ReadbackCancelledError);
+    await assert.rejects(
+      readback.read(destination, () => {
+        snapshots++;
+      }),
+      ReadbackCancelledError,
+    );
     assert.equal(snapshots, 0);
   });
 }
@@ -205,12 +266,18 @@ test("context loss cancels the snapshot and restoration permits a fresh readback
   context.canvas.dispatchEvent(new Event("webglcontextlost"));
   await rejected;
   assert.equal(context.buffers[1].deleted, true);
-  await assert.rejects(readback.read(destination, () => {}), ReadbackCancelledError);
+  await assert.rejects(
+    readback.read(destination, () => {}),
+    ReadbackCancelledError,
+  );
 
   context.lost = false;
   context.canvas.dispatchEvent(new Event("webglcontextrestored"));
   const source = new Uint8Array(destination.length).fill(97);
-  await finish(readback.read(destination, () => context.snapshotLayer(0, source)), scheduler);
+  await finish(
+    readback.read(destination, () => context.snapshotLayer(0, source)),
+    scheduler,
+  );
   assert.deepEqual(destination, source);
   assert.notEqual(context.buffers[1], context.buffers[2]);
   readback.dispose();
@@ -220,9 +287,16 @@ test("concurrent reads cannot replace a pending snapshot", async () => {
   const { scheduler, context, readback } = fixture();
   const source = new Uint8Array(32).fill(101);
   const destination = new Uint8Array(source.length);
-  const pending = readback.read(destination, () => context.snapshotLayer(0, source));
+  const pending = readback.read(destination, () =>
+    context.snapshotLayer(0, source),
+  );
   let replacementSnapshots = 0;
-  await assert.rejects(readback.read(destination, () => { replacementSnapshots++; }), /already in progress/);
+  await assert.rejects(
+    readback.read(destination, () => {
+      replacementSnapshots++;
+    }),
+    /already in progress/,
+  );
   assert.equal(replacementSnapshots, 0);
   await finish(pending, scheduler);
   assert.deepEqual(destination, source);
@@ -232,7 +306,12 @@ test("concurrent reads cannot replace a pending snapshot", async () => {
 test("snapshot and fence failures release readback ownership and restore the caller binding", async () => {
   const { scheduler, context, previous, readback } = fixture();
   const destination = new Uint8Array(32);
-  await assert.rejects(readback.read(destination, () => { throw new Error("snapshot failed"); }), /snapshot failed/);
+  await assert.rejects(
+    readback.read(destination, () => {
+      throw new Error("snapshot failed");
+    }),
+    /snapshot failed/,
+  );
   assert.equal(context.bound, previous);
   context.status = context.WAIT_FAILED;
   const pending = readback.read(destination, () => {});
@@ -244,7 +323,10 @@ test("snapshot and fence failures release readback ownership and restore the cal
 
   context.status = context.CONDITION_SATISFIED;
   const source = new Uint8Array(destination.length).fill(107);
-  await finish(readback.read(destination, () => context.snapshotLayer(0, source)), scheduler);
+  await finish(
+    readback.read(destination, () => context.snapshotLayer(0, source)),
+    scheduler,
+  );
   assert.deepEqual(destination, source);
   readback.dispose();
 });

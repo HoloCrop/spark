@@ -1,9 +1,19 @@
-import { build_ext_raycast_bounds, build_packed_raycast_bounds } from "spark-rs";
+import {
+  build_ext_raycast_bounds,
+  build_packed_raycast_bounds,
+} from "spark-rs";
 import type { PagedExtResult, PagedPackedResult } from "./PagedSplatResult";
-import { LN_SCALE_MAX, LN_SCALE_MIN, type ExtResult, type PackedResult } from "./defines";
+import {
+  type ExtResult,
+  LN_SCALE_MAX,
+  LN_SCALE_MIN,
+  type PackedResult,
+} from "./defines";
 
 // Runs in the decode worker, before its geometry and compact bounds are transferred.
-export function preparePagedPackedResult(result: PackedResult): PagedPackedResult {
+export function preparePagedPackedResult(
+  result: PackedResult,
+): PagedPackedResult {
   const { lodTree } = result.extra;
   if (!lodTree) throw new Error("Paged splats require LoD tree data");
   return {

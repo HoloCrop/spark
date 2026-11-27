@@ -143,7 +143,9 @@ export class RgbaArray {
         this.source.type = THREE.UnsignedByteType;
         this.source.internalFormat = "RGBA8";
         this.source.needsUpdate = true;
-      } else if (this.array.buffer !== (this.source.image.data as Uint8Array).buffer) {
+      } else if (
+        this.array.buffer !== (this.source.image.data as Uint8Array).buffer
+      ) {
         this.source.image.data = new Uint8Array(this.array.buffer);
       }
       this.source.needsUpdate = true;

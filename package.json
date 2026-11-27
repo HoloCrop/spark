@@ -52,9 +52,7 @@
     "test:generator-programs": "node scripts/test-raycast.mjs test/generator-programs.test.ts"
   },
   "repository": "sparkjsdev/spark",
-  "files": [
-    "dist"
-  ],
+  "files": ["dist"],
   "license": "MIT",
   "devDependencies": {
     "@biomejs/biome": "1.9.4",
@@ -78,12 +76,5 @@
   "peerDependencies": {
     "three": ">=0.185.0"
   },
-  "keywords": [
-    "3d",
-    "three.js",
-    "gsplats",
-    "3dgs",
-    "gaussian",
-    "splats"
-  ]
+  "keywords": ["3d", "three.js", "gsplats", "3dgs", "gaussian", "splats"]
 }

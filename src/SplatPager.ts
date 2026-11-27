@@ -2,8 +2,8 @@ import * as THREE from "three";
 
 import { evaluateExtSH, randomColourFromID } from "./ExtSplats";
 import { evaluatePackedSH } from "./PackedSplats";
-import type { PagedSplats } from "./PagedSplats";
 import type { PagedExtResult, PagedPackedResult } from "./PagedSplatResult";
+import type { PagedSplats } from "./PagedSplats";
 import { SplatRaycastBlocks } from "./SplatRaycastBlocks";
 import * as dyno from "./dyno";
 import { type DynoUsampler2DArray, pagedSplatTexCoord } from "./dyno";
@@ -113,20 +113,20 @@ export class SplatPager {
   >;
   extTexture: dyno.DynoUsampler2DArray<"extTexture", THREE.DataArrayTexture>;
 
-  highlightTexture: dyno.DynoUsampler2D<'highlight', THREE.DataTexture>;
-  lookUpTexture: dyno.DynoUsampler2D<'lookup', THREE.DataTexture>;
+  highlightTexture: dyno.DynoUsampler2D<"highlight", THREE.DataTexture>;
+  lookUpTexture: dyno.DynoUsampler2D<"lookup", THREE.DataTexture>;
   labelTexture: dyno.DynoUsampler2DArray<"label", THREE.DataArrayTexture>;
   instanceTexture: dyno.DynoUsampler2DArray<"instance", THREE.DataArrayTexture>;
   labelLookupModifier: dyno.Dyno<
-  {
-    gsplat: typeof dyno.Gsplat, 
-    lookup: 'usampler2D', 
-    label: 'usampler2DArray', 
-    instance: 'usampler2DArray', 
-    highlight: 'usampler2D'
-  },
-  { gsplat: typeof dyno.Gsplat }
-  >
+    {
+      gsplat: typeof dyno.Gsplat;
+      lookup: "usampler2D";
+      label: "usampler2DArray";
+      instance: "usampler2DArray";
+      highlight: "usampler2D";
+    },
+    { gsplat: typeof dyno.Gsplat }
+  >;
 
   readonly shTextures: [
     dyno.DynoUsampler2DArray<"sh1", THREE.DataArrayTexture>,
@@ -213,55 +213,55 @@ export class SplatPager {
 
     this.highlightTexture = new dyno.DynoUsampler2D({
       value: new THREE.DataTexture(
-        new Uint32Array(256), 
-        256, 1,
+        new Uint32Array(256),
+        256,
+        1,
         THREE.RedIntegerFormat,
         THREE.UnsignedIntType,
-      )
+      ),
     });
     this.highlightTexture.value.needsUpdate = true;
     this.renderer.initTexture(this.highlightTexture.value);
 
     this.lookUpTexture = new dyno.DynoUsampler2D({
       value: new THREE.DataTexture(
-        new Uint32Array(256), 
-        256, 1,
+        new Uint32Array(256),
+        256,
+        1,
         THREE.RedIntegerFormat,
         THREE.UnsignedIntType,
-      )
+      ),
     });
     (this.lookUpTexture.value.image.data as Uint32Array).fill(1);
     this.lookUpTexture.value.needsUpdate = true;
     this.renderer.initTexture(this.lookUpTexture.value);
 
     this.labelTexture = new dyno.DynoUsampler2DArray({
-      value: SplatPager.emptyLabelTexture
+      value: SplatPager.emptyLabelTexture,
     });
 
     this.instanceTexture = new dyno.DynoUsampler2DArray({
-      value: SplatPager.emptyLabelTexture
+      value: SplatPager.emptyLabelTexture,
     });
 
     this.labelLookupModifier = new dyno.Dyno({
-        inTypes:  { 
-          gsplat: dyno.Gsplat, 
-          lookup: 'usampler2D', 
-          label: 'usampler2DArray',
-          instance: 'usampler2DArray',
-          highlight: 'usampler2D'
-        },
-        outTypes: { gsplat: dyno.Gsplat },
-        inputs: { 
-          lookup: this.lookUpTexture, 
-          label: this.labelTexture,
-          instance: this.instanceTexture,
-          highlight: this.highlightTexture
-        },
-        globals: () => [
-          randomColourFromID,
-          dyno.defineGsplat],
-        statements: ({ inputs, outputs }) => 
-          dyno.unindentLines(`
+      inTypes: {
+        gsplat: dyno.Gsplat,
+        lookup: "usampler2D",
+        label: "usampler2DArray",
+        instance: "usampler2DArray",
+        highlight: "usampler2D",
+      },
+      outTypes: { gsplat: dyno.Gsplat },
+      inputs: {
+        lookup: this.lookUpTexture,
+        label: this.labelTexture,
+        instance: this.instanceTexture,
+        highlight: this.highlightTexture,
+      },
+      globals: () => [randomColourFromID, dyno.defineGsplat],
+      statements: ({ inputs, outputs }) =>
+        dyno.unindentLines(`
           Gsplat g = ${inputs.gsplat};
       
           ivec3 splatCoord = ivec3(g.index & 255, (g.index >> 8) & 255, g.index >> 16);
@@ -277,9 +277,8 @@ export class SplatPager {
           }
 
           ${outputs.gsplat} = g;
-        `), 
-      });
-
+        `),
+    });
 
     this.readIndex = dyno.dynoBlock(
       { index: "int", numSplats: "int", indices: "usampler2D" },
@@ -509,7 +508,6 @@ export class SplatPager {
     }
   }
 
-
   public updateLabelLookup(categories: Set<number>) {
     const array = this.lookUpTexture.value.image.data as Uint32Array;
     array.fill(0);
@@ -562,7 +560,6 @@ export class SplatPager {
     }
   }
 
-
   private ensureInstanceTextures() {
     if (this.instanceTexture.value === SplatPager.emptyLabelTexture) {
       this.instanceTexture.value = this.newUintArrayTex(
@@ -576,7 +573,6 @@ export class SplatPager {
       );
     }
   }
-
 
   private ensureShTextures(numTextures: number) {
     const emptyShTextures = this.extSplats
@@ -712,7 +708,7 @@ export class SplatPager {
     shArrays: Array<Uint32Array>,
     extArray?: Uint32Array,
     labels?: Uint32Array,
-    instances?: Uint32Array
+    instances?: Uint32Array,
   ) {
     const pageBase = page * PAGE_SPLATS;
 
@@ -726,12 +722,12 @@ export class SplatPager {
     // With extSplats SH3 spans two textures: four arrays, three degrees.
     this.curSh = Math.max(this.curSh, Math.min(shArrays.length, 3));
     this.ensureShTextures(shArrays.length);
-    if ( labels !== undefined ) {
+    if (labels !== undefined) {
       this.ensureLabelTextures();
       uploadTextureLayer(this.labelTexture, page, pageBase, labels);
     }
 
-    if ( instances !== undefined ) {
+    if (instances !== undefined) {
       this.ensureInstanceTextures();
       uploadTextureLayer(this.instanceTexture, page, pageBase, instances);
     }
@@ -984,8 +980,24 @@ export class SplatPager {
       if (!upload) {
         break;
       }
-      const { page, packedArray, raycastBounds, extArray, shArrays, labels, instances } = upload;
-      this.uploadPage(page, packedArray, raycastBounds, shArrays, extArray, labels, instances);
+      const {
+        page,
+        packedArray,
+        raycastBounds,
+        extArray,
+        shArrays,
+        labels,
+        instances,
+      } = upload;
+      this.uploadPage(
+        page,
+        packedArray,
+        raycastBounds,
+        shArrays,
+        extArray,
+        labels,
+        instances,
+      );
     }
   }
 

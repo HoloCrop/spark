@@ -19,8 +19,11 @@ import init_wasm, {
   bhatt_lod_extsplats,
   get_lod_tree_level,
 } from "spark-rs";
+import {
+  preparePagedExtResult,
+  preparePagedPackedResult,
+} from "./PagedSplatDecode";
 import type { ExtResult, PackedResult, SplatEncoding } from "./defines";
-import { preparePagedExtResult, preparePagedPackedResult } from "./PagedSplatDecode";
 
 const rpcHandlers = {
   sortSplats16,

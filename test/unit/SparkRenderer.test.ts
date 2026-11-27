@@ -2,8 +2,8 @@ import * as THREE from "three";
 import { describe, expect, test, vi } from "vitest";
 import { PackedSplats } from "../../src/PackedSplats";
 import { SparkRenderer } from "../../src/SparkRenderer";
-import { SplatGenerator } from "../../src/SplatGenerator";
 import { SplatDepthReadback } from "../../src/SplatDepthReadback";
+import { SplatGenerator } from "../../src/SplatGenerator";
 import { SplatMesh } from "../../src/SplatMesh";
 import { Dyno, dynoBlock } from "../../src/dyno/base";
 import { Gsplat } from "../../src/dyno/splats";
@@ -12,7 +12,7 @@ import { computeMaxSplats } from "../../src/utils";
 // Sort scheduling tests hold the snapshot boundary; GPU ownership is exercised
 // by test/depth-readback.test.ts and the real browser tests.
 vi.mock("../../src/SplatDepthReadback", async (importOriginal) => ({
-  ...await importOriginal<typeof import("../../src/SplatDepthReadback")>(),
+  ...(await importOriginal<typeof import("../../src/SplatDepthReadback")>()),
   SplatDepthReadback: class {
     async read() {}
     dispose() {}
@@ -413,12 +413,10 @@ describe("a disposed SparkRenderer", () => {
 
   test("drops a sort rejection that arrives after it", async () => {
     const { spark, camera, frame } = await setup(splatGenerator(64));
-    vi.spyOn(SplatDepthReadback.prototype, "read").mockImplementation(
-      () => {
-        spark.dispose();
-        return Promise.reject();
-      },
-    );
+    vi.spyOn(SplatDepthReadback.prototype, "read").mockImplementation(() => {
+      spark.dispose();
+      return Promise.reject();
+    });
     camera.position.x += 1;
 
     await expectNoUnhandledRejection(frame);

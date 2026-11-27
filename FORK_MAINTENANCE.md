@@ -296,6 +296,12 @@ the deployed Python encoder. Update the frontend's exact Git pin only after the
 new distribution and staging browser checks pass. Publish releases from fork
 `main` so the deployed revision is always reachable from the default branch.
 
+Distribution CI builds on pull requests and `main` with read-only repository
+permissions, then uploads the built files as a `spark-dist` artifact. It does
+not depend on upstream's private GitHub App or push release commits. Include
+reviewed, regenerated `dist` files in the explicit release change before
+updating a consumer's Git pin.
+
 To reproduce the source inventory independently of generated artifacts:
 
 ```sh

@@ -4,13 +4,16 @@ import { PackedSplats } from "./PackedSplats";
 import { PagedSplats } from "./PagedSplats";
 import { Readback } from "./Readback";
 import { SplatAccumulator } from "./SplatAccumulator";
+import {
+  ReadbackCancelledError,
+  SplatDepthReadback,
+} from "./SplatDepthReadback";
 import type { SplatGenerator } from "./SplatGenerator";
 import { SplatGeometry } from "./SplatGeometry";
 import { SplatMesh } from "./SplatMesh";
 import { SplatPager } from "./SplatPager";
 import { SplatProgramRegistry } from "./SplatProgramRegistry";
 import { SplatWorker } from "./SplatWorker";
-import { ReadbackCancelledError, SplatDepthReadback } from "./SplatDepthReadback";
 import { SPLAT_TEX_HEIGHT, SPLAT_TEX_WIDTH } from "./defines";
 import { SPARK_ENABLE_HOOKS, sparkHook } from "./hooks";
 import { getShaders } from "./shaders";
@@ -1871,10 +1874,21 @@ export class SparkRenderer extends THREE.Mesh {
     await this.depthReadback.read(readbackUint8, () => {
       try {
         for (let base = 0; base < numSplats; base += layerSize) {
-          const rows = Math.min(SPLAT_TEX_HEIGHT, Math.ceil((numSplats - base) / SPLAT_TEX_WIDTH));
+          const rows = Math.min(
+            SPLAT_TEX_HEIGHT,
+            Math.ceil((numSplats - base) / SPLAT_TEX_WIDTH),
+          );
           renderer.setRenderTarget(target, base / layerSize);
           gl.readBuffer(gl.COLOR_ATTACHMENT0 + (current.extSplats ? 2 : 1));
-          gl.readPixels(0, 0, SPLAT_TEX_WIDTH, rows, gl.RGBA, gl.UNSIGNED_BYTE, base * 4);
+          gl.readPixels(
+            0,
+            0,
+            SPLAT_TEX_WIDTH,
+            rows,
+            gl.RGBA,
+            gl.UNSIGNED_BYTE,
+            base * 4,
+          );
         }
       } finally {
         renderer.setRenderTarget(renderState.target, activeLayer, mipLevel);

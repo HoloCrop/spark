@@ -64,7 +64,8 @@ export function raycastSplatMesh(
       raycaster.camera.projectionMatrix.elements[8],
       raycaster.camera.projectionMatrix.elements[9],
     ]);
-    const forward = -ray.direction.clone()
+    const forward = -ray.direction
+      .clone()
       .transformDirection(raycaster.camera.matrixWorldInverse).z;
     near = Math.max(near, raycaster.camera.near / forward);
     far = Math.min(far, raycaster.camera.far / forward);
@@ -83,10 +84,14 @@ export function raycastSplatMesh(
         : null) ??
     null;
   if (mesh.paged?.pager && projection && !mesh.raycastIndices) {
-    const displayedIndices = mesh.paged.dynoIndices.value.image.data as Uint32Array;
+    const displayedIndices = mesh.paged.dynoIndices.value.image
+      .data as Uint32Array;
     indices = mesh.paged.pager.raycastBlocks.query(
-      mesh.paged.pager, displayedIndices.subarray(0, numSplats), projection,
-      origin.toArray(), direction.toArray(),
+      mesh.paged.pager,
+      displayedIndices.subarray(0, numSplats),
+      projection,
+      origin.toArray(),
+      direction.toArray(),
     );
     numSplats = indices.length;
   }
@@ -152,7 +157,13 @@ export function raycastSplatMesh(
         splatEncoding?.lodOpacity ?? false,
         projection,
       );
-      samples = appendRaycastBuffer(samples, profiles, get_raycast_indices(), base, indices);
+      samples = appendRaycastBuffer(
+        samples,
+        profiles,
+        get_raycast_indices(),
+        base,
+        indices,
+      );
     }
   } else {
     const buffer2 = get_raycast_buffer2();
@@ -212,7 +223,13 @@ export function raycastSplatMesh(
         count,
         projection,
       );
-      samples = appendRaycastBuffer(samples, profiles, get_raycast_indices(), base, indices);
+      samples = appendRaycastBuffer(
+        samples,
+        profiles,
+        get_raycast_indices(),
+        base,
+        indices,
+      );
     }
   }
 
@@ -230,16 +247,20 @@ export function raycastSplatMesh(
       distance,
       point,
       object: mesh,
-      index: raycastSplatIndices[raycast_surface_index(
-        raycastBuffer.subarray(0, samples), distance,
-      )],
+      index:
+        raycastSplatIndices[
+          raycast_surface_index(raycastBuffer.subarray(0, samples), distance)
+        ],
     });
   }
 }
 
 function appendRaycastBuffer(
-  count: number, additional: Float32Array, sourceIndices: Uint32Array,
-  base: number, indices: Uint32Array | null,
+  count: number,
+  additional: Float32Array,
+  sourceIndices: Uint32Array,
+  base: number,
+  indices: Uint32Array | null,
 ) {
   const total = count + additional.length;
   let capacity = raycastBuffer.length;

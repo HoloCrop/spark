@@ -20,8 +20,11 @@ import {
   SplatTransformer,
 } from "./SplatGenerator";
 import { SplatPager } from "./SplatPager";
-import { raycastSplatMesh, type SplatSurfaceIntersection } from "./SplatSurfaceRaycast";
 import type { SplatSkinning } from "./SplatSkinning";
+import {
+  type SplatSurfaceIntersection,
+  raycastSplatMesh,
+} from "./SplatSurfaceRaycast";
 import {
   DEFAULT_SPLAT_ENCODING,
   type SplatEncoding,
@@ -446,7 +449,7 @@ export class SplatMesh extends SplatGenerator {
       });
     } else {
       this.isInitialized = true;
-      
+
       this.initialized = Promise.resolve(this);
       if (options.onLoad) {
         const maybePromise = options.onLoad(this);
@@ -538,7 +541,7 @@ export class SplatMesh extends SplatGenerator {
         this.splats = this.extSplats;
       }
     }
-    
+
     if (this.splats) {
       this.numSplats = this.splats.getNumSplats();
       this.updateGenerator();
@@ -753,9 +756,11 @@ export class SplatMesh extends SplatGenerator {
             gsplat = modifier.apply({ gsplat }).gsplat;
           }
         }
-        
+
         if (this.paged?.pager?.labelLookupModifier) {
-          gsplat = this.paged?.pager?.labelLookupModifier.apply({ gsplat }).gsplat;
+          gsplat = this.paged?.pager?.labelLookupModifier.apply({
+            gsplat,
+          }).gsplat;
         }
 
         // We're done! Output resulting Gsplat

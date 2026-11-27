@@ -1,4 +1,8 @@
-import type { CovSplatGenerator, GsplatGenerator, SplatGenerator } from "./SplatGenerator";
+import type {
+  CovSplatGenerator,
+  GsplatGenerator,
+  SplatGenerator,
+} from "./SplatGenerator";
 import type { DynoProgram } from "./dyno/program";
 
 export enum SplatProgramMode {
@@ -10,9 +14,16 @@ export enum SplatProgramMode {
 
 /** Generation programs owned by one renderer, shared by its accumulator ring. */
 export class SplatProgramRegistry {
-  private programs = new Map<GsplatGenerator | CovSplatGenerator, Map<SplatProgramMode, DynoProgram>>();
+  private programs = new Map<
+    GsplatGenerator | CovSplatGenerator,
+    Map<SplatProgramMode, DynoProgram>
+  >();
 
-  get(generator: GsplatGenerator | CovSplatGenerator, mode: SplatProgramMode, create: () => DynoProgram): DynoProgram {
+  get(
+    generator: GsplatGenerator | CovSplatGenerator,
+    mode: SplatProgramMode,
+    create: () => DynoProgram,
+  ): DynoProgram {
     let modes = this.programs.get(generator);
     if (!modes) {
       modes = new Map();

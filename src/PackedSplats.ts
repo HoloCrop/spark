@@ -761,7 +761,10 @@ export class PackedSplats implements SplatSource {
         this.source.type = THREE.UnsignedIntType;
         this.source.internalFormat = "RGBA32UI";
         this.source.needsUpdate = true;
-      } else if (this.packedArray.buffer !== (this.source.image.data as Uint32Array).buffer) {
+      } else if (
+        this.packedArray.buffer !==
+        (this.source.image.data as Uint32Array).buffer
+      ) {
         // The source texture is the right size, update the data
         this.source.image.data = new Uint8Array(this.packedArray.buffer);
       }

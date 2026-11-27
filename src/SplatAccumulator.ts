@@ -83,7 +83,11 @@ export class SplatAccumulator {
     extSplats,
     covSplats,
     programs,
-  }: { extSplats?: boolean; covSplats?: boolean; programs?: SplatProgramRegistry } = {}) {
+  }: {
+    extSplats?: boolean;
+    covSplats?: boolean;
+    programs?: SplatProgramRegistry;
+  } = {}) {
     if (!threeMrtArray) {
       throw new Error("Spark requires THREE.js r179 or above");
     }
@@ -235,8 +239,12 @@ export class SplatAccumulator {
     }
 
     const mode = this.extSplats
-      ? this.covSplats ? SplatProgramMode.ExtendedCovariance : SplatProgramMode.Extended
-      : this.covSplats ? SplatProgramMode.PackedCovariance : SplatProgramMode.Packed;
+      ? this.covSplats
+        ? SplatProgramMode.ExtendedCovariance
+        : SplatProgramMode.Extended
+      : this.covSplats
+        ? SplatProgramMode.PackedCovariance
+        : SplatProgramMode.Packed;
     const program = this.programs.get(theGenerator, mode, () => {
       const graph = dynoBlock(
         { index: "int" },
