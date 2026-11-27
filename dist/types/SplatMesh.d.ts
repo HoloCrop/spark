@@ -4,6 +4,7 @@ import { RgbaArray, TRgbaArray } from './RgbaArray';
 import { SplatEdit, SplatEdits } from './SplatEdit';
 import { CovSplatModifier, CovSplatTransformer, FrameUpdateContext, GsplatModifier, SplatGenerator, SplatTransformer } from './SplatGenerator';
 import { PagedSplats, SplatPager } from './SplatPager';
+import { SplatSurfaceIntersection } from './SplatSurfaceRaycast';
 import { SplatSkinning } from './SplatSkinning';
 import { SplatEncoding, SplatFileType } from './defines';
 import { DynoBool, DynoFloat, DynoInt, DynoUsampler2D, DynoVal, DynoVec4, Gsplat } from './dyno';
@@ -154,15 +155,7 @@ export declare class SplatMesh extends SplatGenerator {
     constructCovGenerator(context: SplatMeshContext): void;
     updateGenerator(): void;
     update({ renderer, time, deltaTime, viewToWorld, camera, renderSize, globalEdits, lodIndices, }: FrameUpdateContext): void;
-    raycast(raycaster: THREE.Raycaster, intersects: {
-        distance: number;
-        point: THREE.Vector3;
-        object: THREE.Object3D;
-        index: number;
-    }[]): void;
-    static raycastBuffer: Float32Array<ArrayBuffer>;
-    static raycastSplatIndices: Uint32Array<ArrayBuffer>;
-    private appendRaycastBuffer;
+    raycast(raycaster: THREE.Raycaster, intersects: SplatSurfaceIntersection[]): void;
     createLodSplats({ rgbaArray, quality, }?: {
         rgbaArray?: RgbaArray;
         quality?: boolean;

@@ -1,3 +1,5 @@
+HoloCrop fork: see [fork changes and upstream integration](FORK_MAINTENANCE.md).
+
 <p align="center">
 
   ![Spark logo](https://github.com/user-attachments/assets/5287631a-083c-4c86-80f6-4dca24aa263f#gh-light-mode-only)
