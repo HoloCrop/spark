@@ -32,7 +32,18 @@ export class SplatRaycastBlocks {
     return index;
   }
 
-  query(pager: SplatPager, indices: Uint32Array, projection: Float32Array, origin: number[], direction: number[]) {
-    return this.refresh(pager).query(indices, projection, new Float32Array(origin), new Float32Array(direction));
+  query(
+    pager: SplatPager,
+    indices: Uint32Array,
+    projection: Float32Array,
+    origin: number[],
+    direction: number[],
+  ) {
+    return this.refresh(pager).query(
+      indices,
+      projection,
+      new Float32Array(origin),
+      new Float32Array(direction),
+    );
   }
 }

@@ -1,19 +1,38 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import {
+  extsplats_to_gsplatarray,
+  packedsplats_to_gsplatarray,
+} from "spark-rs";
 import * as THREE from "three";
-import { ExtSplats, PackedSplats, SplatMesh, SplatPager, PagedSplats, SplatFileType } from "../src/index";
-import { initialization } from "../src/wasm";
-import { preparePagedExtResult, preparePagedPackedResult } from "../src/PagedSplatDecode";
+import {
+  preparePagedExtResult,
+  preparePagedPackedResult,
+} from "../src/PagedSplatDecode";
 import { DEFAULT_SPLAT_ENCODING } from "../src/defines";
-import { extsplats_to_gsplatarray, packedsplats_to_gsplatarray } from "spark-rs";
+import {
+  ExtSplats,
+  PackedSplats,
+  PagedSplats,
+  SplatFileType,
+  SplatMesh,
+  SplatPager,
+} from "../src/index";
+import { initialization } from "../src/wasm";
 
 await initialization;
 
 for (const Source of [PackedSplats, ExtSplats]) {
   test(`${Source.name} keeps semantic arrays through native batches past the first chunk`, () => {
     const count = 65539;
-    const labels = Uint32Array.from({ length: count }, (_, index) => index % 17);
-    const instances = Uint32Array.from({ length: count }, (_, index) => index + 100);
+    const labels = Uint32Array.from(
+      { length: count },
+      (_, index) => index % 17,
+    );
+    const instances = Uint32Array.from(
+      { length: count },
+      (_, index) => index + 100,
+    );
     const splats = new Source({ maxSplats: count });
     const center = new THREE.Vector3();
     const scale = new THREE.Vector3(0.1, 0.1, 0.1);
@@ -22,10 +41,24 @@ for (const Source of [PackedSplats, ExtSplats]) {
     for (let index = 0; index < count; index++) {
       splats.setSplat(index, center, scale, rotation, 0.8, color);
     }
-    const native = splats instanceof ExtSplats
-      ? extsplats_to_gsplatarray(count, splats.extArrays[0], splats.extArrays[1], { labels, instances })
-      : packedsplats_to_gsplatarray(count, splats.packedArray, { labels, instances }, DEFAULT_SPLAT_ENCODING);
-    const result = native.to_extsplats() as { labels: Uint32Array; instances: Uint32Array };
+    const native =
+      splats instanceof ExtSplats
+        ? extsplats_to_gsplatarray(
+            count,
+            splats.extArrays[0],
+            splats.extArrays[1],
+            { labels, instances },
+          )
+        : packedsplats_to_gsplatarray(
+            count,
+            splats.packedArray,
+            { labels, instances },
+            DEFAULT_SPLAT_ENCODING,
+          );
+    const result = native.to_extsplats() as {
+      labels: Uint32Array;
+      instances: Uint32Array;
+    };
     assert.deepEqual(result.labels.subarray(0, count), labels);
     assert.deepEqual(result.instances.subarray(0, count), instances);
     native.free();
@@ -42,19 +75,39 @@ for (const Source of [PackedSplats, ExtSplats]) {
     const color = new THREE.Color(1, 1, 1);
     splats.setSplat(0, center, scale, rotation, 0, color);
     splats.setSplat(65536, center, scale, rotation, 0.8, color);
-    splats.setSplat(65537, new THREE.Vector3(10, 0, 5), scale, rotation, 0.8, color);
-    const mesh = new SplatMesh(splats instanceof PackedSplats ? { packedSplats: splats } : { extSplats: splats });
+    splats.setSplat(
+      65537,
+      new THREE.Vector3(10, 0, 5),
+      scale,
+      rotation,
+      0.8,
+      color,
+    );
+    const mesh = new SplatMesh(
+      splats instanceof PackedSplats
+        ? { packedSplats: splats }
+        : { extSplats: splats },
+    );
     // Supply the splat count normally populated by the renderer frame update.
     mesh.context.numSplats.value = splats.numSplats;
-    const ray = new THREE.Raycaster(new THREE.Vector3(), new THREE.Vector3(0, 0, 1));
+    const ray = new THREE.Raycaster(
+      new THREE.Vector3(),
+      new THREE.Vector3(0, 0, 1),
+    );
     const [direct] = ray.intersectObject(mesh);
     assert.equal(direct.index, 65536);
     assert.ok(direct.distance > 4 && direct.distance < 5);
 
     if (splats instanceof PackedSplats) {
-      splats.lodSplats = new PackedSplats({ packedArray: splats.packedArray, numSplats: splats.numSplats });
+      splats.lodSplats = new PackedSplats({
+        packedArray: splats.packedArray,
+        numSplats: splats.numSplats,
+      });
     } else {
-      splats.lodSplats = new ExtSplats({ extArrays: splats.extArrays, numSplats: splats.numSplats });
+      splats.lodSplats = new ExtSplats({
+        extArrays: splats.extArrays,
+        numSplats: splats.numSplats,
+      });
     }
     const indices = new Uint32Array(65538);
     indices[0] = 65537; // A miss must not shift subsequent sample identities.
@@ -75,29 +128,68 @@ for (const ext of [false, true]) {
   test(`paged ${ext ? "extended" : "packed"} block cache follows uploads, visibility and display indices`, () => {
     // GPU uploads are irrelevant to this CPU picking integration test.
     const renderer = { initTexture() {} } as THREE.WebGLRenderer;
-    const pager = new SplatPager({renderer, extSplats: ext, maxSplats: 65536, autoDrive: false, onUpdate() {}});
-    const paged = new PagedSplats({pager, fileType: SplatFileType.PLY, fileBytes: new Uint8Array()});
-    pager.pageToSplatsChunk[0] = {splats: paged, chunk: 0, time: 0};
-    const mesh = new SplatMesh({paged});
-    const splats = ext ? new ExtSplats({maxSplats: 128}) : new PackedSplats({maxSplats: 128});
+    const pager = new SplatPager({
+      renderer,
+      extSplats: ext,
+      maxSplats: 65536,
+      autoDrive: false,
+      onUpdate() {},
+    });
+    const paged = new PagedSplats({
+      pager,
+      fileType: SplatFileType.PLY,
+      fileBytes: new Uint8Array(),
+    });
+    pager.pageToSplatsChunk[0] = { splats: paged, chunk: 0, time: 0 };
+    const mesh = new SplatMesh({ paged });
+    const splats = ext
+      ? new ExtSplats({ maxSplats: 128 })
+      : new PackedSplats({ maxSplats: 128 });
     const scale = new THREE.Vector3(0.05, 0.05, 0.05);
     const rotation = new THREE.Quaternion();
-    const color = new THREE.Color(1,1,1);
+    const color = new THREE.Color(1, 1, 1);
     for (let index = 0; index < 128; index++) {
-      splats.setSplat(index, new THREE.Vector3(0,0,index < 64 ? -3 : -5), scale, rotation, 0.9, color);
+      splats.setSplat(
+        index,
+        new THREE.Vector3(0, 0, index < 64 ? -3 : -5),
+        scale,
+        rotation,
+        0.9,
+        color,
+      );
     }
     const upload = (numSplats = 128) => {
       // The decode worker prepares bounds before transferring the page to the pager.
       const extra = { lodTree: new Uint32Array() };
-      const decoded = splats instanceof ExtSplats
-        ? preparePagedExtResult({numSplats, extArrays: splats.extArrays, extra})
-        : preparePagedPackedResult({numSplats, packedArray: splats.packedArray, splatEncoding: splats.splatEncoding ?? DEFAULT_SPLAT_ENCODING, extra});
-      const raycastBounds = structuredClone(decoded.raycastBounds, {transfer: [decoded.raycastBounds.buffer]});
-      pager.readyUploads.push({page: 0, numSplats,
-        packedArray: splats instanceof ExtSplats ? splats.extArrays[0] : splats.packedArray,
+      const decoded =
+        splats instanceof ExtSplats
+          ? preparePagedExtResult({
+              numSplats,
+              extArrays: splats.extArrays,
+              extra,
+            })
+          : preparePagedPackedResult({
+              numSplats,
+              packedArray: splats.packedArray,
+              splatEncoding: splats.splatEncoding ?? DEFAULT_SPLAT_ENCODING,
+              extra,
+            });
+      const raycastBounds = structuredClone(decoded.raycastBounds, {
+        transfer: [decoded.raycastBounds.buffer],
+      });
+      pager.readyUploads.push({
+        page: 0,
+        numSplats,
+        packedArray:
+          splats instanceof ExtSplats
+            ? splats.extArrays[0]
+            : splats.packedArray,
         extArray: splats instanceof ExtSplats ? splats.extArrays[1] : undefined,
         raycastBounds,
-        shArrays: [], labels: new Uint32Array(128).fill(1), instances: new Uint32Array(128).fill(1)});
+        shArrays: [],
+        labels: new Uint32Array(128).fill(1),
+        instances: new Uint32Array(128).fill(1),
+      });
       pager.processUploads();
     };
     upload();
@@ -106,9 +198,12 @@ for (const ext of [false, true]) {
     displayed[1] = 0;
     paged.update(2, displayed);
     const ray = new THREE.Raycaster();
-    ray.setFromCamera(new THREE.Vector2(), new THREE.PerspectiveCamera(60,1,0.01,100));
+    ray.setFromCamera(
+      new THREE.Vector2(),
+      new THREE.PerspectiveCamera(60, 1, 0.01, 100),
+    );
     const [indexed] = ray.intersectObject(mesh);
-    mesh.raycastIndices = {numSplats: 2, indices: displayed};
+    mesh.raycastIndices = { numSplats: 2, indices: displayed };
     const [exhaustive] = ray.intersectObject(mesh);
     assert.equal(indexed.index, 0);
     assert.equal(indexed.index, exhaustive.index);
@@ -120,7 +215,14 @@ for (const ext of [false, true]) {
     pager.updateLabelLookup(new Set([1]));
     assert.equal(ray.intersectObject(mesh)[0].index, 0);
     for (let index = 0; index < 64; index++) {
-      splats.setSplat(index, new THREE.Vector3(10,0,-3), scale, rotation, 0.9, color);
+      splats.setSplat(
+        index,
+        new THREE.Vector3(10, 0, -3),
+        scale,
+        rotation,
+        0.9,
+        color,
+      );
     }
     upload();
     assert.equal(ray.intersectObject(mesh)[0].index, 64);

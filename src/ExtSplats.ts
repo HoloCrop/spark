@@ -625,7 +625,8 @@ export class ExtSplats implements SplatSource {
         "RGBA32UI",
       );
     } else if (
-      this.extArrays[0].buffer !== (this.textures[0].image.data as Uint32Array).buffer
+      this.extArrays[0].buffer !==
+      (this.textures[0].image.data as Uint32Array).buffer
     ) {
       this.textures[0].image.data = new Uint8Array(this.extArrays[0].buffer);
       this.textures[1].image.data = new Uint8Array(this.extArrays[1].buffer);
@@ -856,7 +857,6 @@ export const defineEvaluateExtSH3 = unindent(/* glsl */ `
       + sh3_6 * (-0.5900436 * viewDir.x * (xx - 3.0 * yy));
   }
 `);
-
 
 export const randomColourFromID = unindent(`
 precision highp float;

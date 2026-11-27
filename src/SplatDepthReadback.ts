@@ -55,7 +55,8 @@ export class SplatDepthReadback {
   }
 
   async read(destination: Uint8Array, snapshot: () => void): Promise<void> {
-    if (this.disposed || this.gl.isContextLost()) throw new ReadbackCancelledError();
+    if (this.disposed || this.gl.isContextLost())
+      throw new ReadbackCancelledError();
     if (this.active) throw new Error("Depth readback is already in progress");
     const controller = new AbortController();
     this.active = controller;
@@ -65,16 +66,23 @@ export class SplatDepthReadback {
 
     try {
       if (!this.buffer) this.buffer = gl.createBuffer();
-      const previous = gl.getParameter(gl.PIXEL_PACK_BUFFER_BINDING) as WebGLBuffer | null;
+      const previous = gl.getParameter(
+        gl.PIXEL_PACK_BUFFER_BINDING,
+      ) as WebGLBuffer | null;
       gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.buffer);
       try {
         // Replace storage before the next snapshot writes, retiring the driver's
         // fenced readback shadow while reusing the buffer handle.
-        gl.bufferData(gl.PIXEL_PACK_BUFFER, destination.byteLength, gl.STREAM_READ);
+        gl.bufferData(
+          gl.PIXEL_PACK_BUFFER,
+          destination.byteLength,
+          gl.STREAM_READ,
+        );
         // Every layer is enqueued before yielding: accumulators can be recycled later.
         snapshot();
         fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
-        if (fence === null) throw new Error("Unable to create depth readback fence");
+        if (fence === null)
+          throw new Error("Unable to create depth readback fence");
         gl.flush();
       } finally {
         gl.bindBuffer(gl.PIXEL_PACK_BUFFER, previous);
@@ -84,12 +92,15 @@ export class SplatDepthReadback {
         await this.scheduler.waitForGPU(signal);
         if (signal.aborted) throw new ReadbackCancelledError();
         const status = gl.clientWaitSync(fence, 0, 0);
-        if (status === gl.WAIT_FAILED) throw new Error("Depth readback fence failed");
+        if (status === gl.WAIT_FAILED)
+          throw new Error("Depth readback fence failed");
         if (status !== gl.TIMEOUT_EXPIRED) break;
       }
 
       if (destination.byteLength === 0) return;
-      const previousCopyBuffer = gl.getParameter(gl.PIXEL_PACK_BUFFER_BINDING) as WebGLBuffer | null;
+      const previousCopyBuffer = gl.getParameter(
+        gl.PIXEL_PACK_BUFFER_BINDING,
+      ) as WebGLBuffer | null;
       gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.buffer);
       try {
         // One transfer per snapshot: each call can incur a synchronous driver round trip.
