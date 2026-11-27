@@ -164,15 +164,15 @@ Call this whenever something changes in the splat processing pipeline, for examp
 
 This is called automatically by `SparkRenderer` and you should not have to call it. It updates parameters for the generated pipeline and calls `updateGenerator()` if the pipeline needs to change.
 
-## `raycast(raycaster, intersects: { distance, point, object}[])`
+## `raycast(raycaster, intersects: { distance, point, object, index}[])`
 
-This method conforms to the standard `THREE.Raycaster` API, appending one surface hit's `distance: number`, `point: THREE.Vector3`, and `object: SplatMesh`. The WebAssembly raycaster evaluates the 3D generalized Gaussian with `k=2` along the ray. Each contributing Gaussian supplies a mean depth, depth sigma and alpha. Thin splats retain their actual scales; zero-opacity and hidden classes are excluded.
+This method conforms to the standard `THREE.Raycaster` API, appending one surface hit's `distance: number`, `point: THREE.Vector3`, `object: SplatMesh`, and contributing source splat `index: number`. The WebAssembly raycaster evaluates the generalized Gaussian with `k=2`. Each contributing Gaussian supplies a mean depth, depth sigma and alpha. Thin splats retain their actual scales; zero-opacity and hidden classes are excluded.
 
 Surface depth is the combined transmittance's `0.5` crossing, following [Geometry-Grounded Gaussian Splatting](https://arxiv.org/abs/2601.17835) and the `k=2` depth profile used in `triton_splatting`. A CPU bisection evaluates the product of the smooth, unoriented profiles after collecting all source chunks. As in Triton's surface definition, alpha is capped at `0.99`, and responses at or below `1/255` are excluded; `minRaycastOpacity` can require a stronger response. Depth sigma is measured in the world ray's distance units.
 
 There is no hit if the combined opacity never reaches `0.5` or the crossing lies outside `raycaster.near` and `far`. Gaussian means outside that interval are retained when their depth profiles contribute to a crossing inside it. Profiles wholly behind the ray origin are excluded.
 
-Raycasting operates on source splats and its own LOD selection, independently of rendered pixels, camera projection and screen-space blur. It is synchronous and iterates over the candidate splats. Raycasting millions of splats can have a noticeable delay and should not run every frame.
+Perspective-camera raycasting uses projected Gaussian coverage and camera near/far clipping. It operates on source splats and the selected LoD indices, independently of rendered pixels and screen-space blur. Set the renderer's `lodRaycast` to zero to use the displayed selection. Paged picking first filters displayed candidates using cached page/block bounds prepared in decode workers. Picking is synchronous; avoid iterating over millions of candidates every frame.
 
 Usage example:
 ```javascript
