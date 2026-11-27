@@ -11,6 +11,8 @@ pub struct Csplat {
     pub rgb: [u8; 3],
     pub scales: [u8; 3],
     pub octrot: [u8; 3],
+    pub label: u32,
+    pub instance_label: u32,
 }
 
 impl Csplat {
@@ -22,6 +24,8 @@ impl Csplat {
             rgb: rgb.to_array().map(|v| ((v - rgb_min) / (rgb_max - rgb_min) * 255.0).clamp(0.0, 255.0).round() as u8),
             scales: scales.to_array().map(|v| encode_scale8(v, ln_scale_min, ln_scale_max)),
             octrot: encode_quat_oct888(quaternion.to_array()),
+            label: 0,
+            instance_label: 0,
         }
     }
 }
@@ -55,8 +59,8 @@ impl<'a> Tsplat for CsplatRef<'a> {
     fn scales(&self) -> Vec3A { get_scales(self.splat, self.encoding) }
     fn quaternion(&self) -> Quat { get_quaternion(self.splat) }
     fn max_scale(&self) -> f32 { get_max_scale(self.splat, self.encoding) }
-    fn label(&self) -> u32 { todo!(); }
-    fn instance_label(&self) -> u32 { todo!(); }
+    fn label(&self) -> u32 { self.splat.label }
+    fn instance_label(&self) -> u32 { self.splat.instance_label }
 }
 
 impl<'a> Tsplat for CsplatRefMut<'a> {
@@ -66,8 +70,8 @@ impl<'a> Tsplat for CsplatRefMut<'a> {
     fn scales(&self) -> Vec3A { get_scales(self.splat, self.encoding) }
     fn quaternion(&self) -> Quat { get_quaternion(self.splat) }
     fn max_scale(&self) -> f32 { get_max_scale(self.splat, self.encoding) }
-    fn label(&self) -> u32 { todo!(); }
-    fn instance_label(&self) -> u32 { todo!(); }
+    fn label(&self) -> u32 { self.splat.label }
+    fn instance_label(&self) -> u32 { self.splat.instance_label }
 }
 
 fn get_center(splat: &Csplat) -> Vec3A { 
@@ -126,8 +130,8 @@ impl<'a> TsplatMut for CsplatRefMut<'a> {
     fn set_rgb(&mut self, rgb: Vec3A) { set_rgb(self.splat, rgb, self.encoding); }
     fn set_scales(&mut self, scales: Vec3A) { set_scales(self.splat, scales, self.encoding); }
     fn set_quaternion(&mut self, quaternion: Quat) { set_quaternion(self.splat, quaternion); }
-    fn set_label(&mut self, _label: u32) { todo!(); }
-    fn set_instance_label(&mut self, _instance_label: u32) { todo!(); }
+    fn set_label(&mut self, label: u32) { self.splat.label = label; }
+    fn set_instance_label(&mut self, instance_label: u32) { self.splat.instance_label = instance_label; }
 }
 
 pub struct CsplatArray {
@@ -198,7 +202,7 @@ impl TsplatArray for CsplatArray {
     }
 
     fn prepare_children(&mut self) {
-        self.children.resize_with(self.len(), || SmallVec::new());
+        self.children.resize_with(self.len(), SmallVec::new);
     }
 
     fn has_children(&self) -> bool {
@@ -251,7 +255,10 @@ impl TsplatArray for CsplatArray {
         let quaternion = Quat::from_mat3a(&basis);
         let opacity = (total_weight / ellipsoid_area(scales)).clamp(0.000001, 1000.0);
         
-        self.splats.push(Csplat::new(center, opacity, rgb, scales, quaternion, &self.encoding));
+        let mut merged = Csplat::new(center, opacity, rgb, scales, quaternion, &self.encoding);
+        merged.label = self.splats[indices[0]].label;
+        merged.instance_label = self.splats[indices[0]].instance_label;
+        self.splats.push(merged);
         self.children.push(indices.iter().map(|&i| i as u32).collect());
 
         if self.max_sh_degree >= 1 {
@@ -330,7 +337,7 @@ impl TsplatArray for CsplatArray {
     }
 
     fn retain<F: (FnMut(CsplatRefMut<'_>) -> bool)>(&mut self, mut f: F) {
-        let keep: Vec<bool> = self.splats.iter_mut().map(|splat| f(CsplatRefMut { splat: splat, encoding: &self.encoding })).collect();
+        let keep: Vec<bool> = self.splats.iter_mut().map(|splat| f(CsplatRefMut { splat, encoding: &self.encoding })).collect();
         let mut bits = keep.iter();
 
         self.splats.retain(|_splat| *bits.next().unwrap());
@@ -358,9 +365,9 @@ impl TsplatArray for CsplatArray {
             .map(|(i, splat)| {
                 if let Some(children) = self.children.get(i) {
                     let children: SmallVec<[usize; 4]> = children.iter().map(|&i| i as usize).collect();
-                    f(CsplatRefMut { splat: splat, encoding: &encoding }, &children)
+                    f(CsplatRefMut { splat, encoding: &encoding }, &children)
                 } else {
-                    f(CsplatRefMut { splat: splat, encoding: &encoding }, &[])
+                    f(CsplatRefMut { splat, encoding: &encoding }, &[])
                 }
             })
             .collect();
@@ -423,11 +430,11 @@ impl TsplatArray for CsplatArray {
         Self {
             encoding: self.encoding.clone(),
             max_sh_degree: self.max_sh_degree,
-            splats: index_map.iter().map(|&i| self.splats[i as usize].clone()).collect(),
-            children: if !self.children.is_empty() { index_map.iter().map(|&i| self.children[i as usize].clone()).collect() } else { Vec::new() },
-            sh1: if !self.sh1.is_empty() { index_map.iter().map(|&i| self.sh1[i as usize].clone()).collect() } else { Vec::new() },
-            sh2: if !self.sh2.is_empty() { index_map.iter().map(|&i| self.sh2[i as usize].clone()).collect() } else { Vec::new() },
-            sh3: if !self.sh3.is_empty() { index_map.iter().map(|&i| self.sh3[i as usize].clone()).collect() } else { Vec::new() },
+            splats: index_map.iter().map(|&i| self.splats[i].clone()).collect(),
+            children: if !self.children.is_empty() { index_map.iter().map(|&i| self.children[i].clone()).collect() } else { Vec::new() },
+            sh1: if !self.sh1.is_empty() { index_map.iter().map(|&i| self.sh1[i].clone()).collect() } else { Vec::new() },
+            sh2: if !self.sh2.is_empty() { index_map.iter().map(|&i| self.sh2[i].clone()).collect() } else { Vec::new() },
+            sh3: if !self.sh3.is_empty() { index_map.iter().map(|&i| self.sh3[i].clone()).collect() } else { Vec::new() },
         }
     }
 
@@ -463,7 +470,7 @@ impl SplatReceiver for CsplatArray {
                 self.sh3.reserve(est_lod_size);
             }
         } else {
-            self.children.resize_with(init.num_splats, || SmallVec::new());
+            self.children.resize_with(init.num_splats, SmallVec::new);
         }
 
         self.splats.resize_with(init.num_splats, Default::default);
@@ -526,12 +533,22 @@ impl SplatReceiver for CsplatArray {
             splat.set_quaternion(Quat::from_slice(&batch.quat[i4..i4 + 4]));
         }
 
+        if !batch.labels.is_empty() { self.set_label(base, count, batch.labels); }
+        if !batch.instances.is_empty() { self.set_instance_label(base, count, batch.instances); }
         self.set_sh(base, count, batch.sh1, batch.sh2, batch.sh3);
 
         if !batch.child_count.is_empty() && !batch.child_start.is_empty() {
             self.set_child_start(base, count, batch.child_start);
             self.set_child_count(base, count, batch.child_count);
         }
+    }
+
+    fn set_label(&mut self, base: usize, count: usize, values: &[u32]) {
+        for i in 0..count { self.splats[base + i].label = values[i]; }
+    }
+
+    fn set_instance_label(&mut self, base: usize, count: usize, values: &[u32]) {
+        for i in 0..count { self.splats[base + i].instance_label = values[i]; }
     }
 
     fn set_center(&mut self, base: usize, count: usize, center: &[f32]) {
@@ -629,7 +646,7 @@ impl SplatReceiver for CsplatArray {
 
     fn set_child_count(&mut self, base: usize, count: usize, child_count: &[u16]) {
         for i in 0..count {
-            let mut child_index = *self.children[base + i].get(0).unwrap_or(&0);
+            let mut child_index = *self.children[base + i].first().unwrap_or(&0);
             self.children[base + i].clear();
             self.children[base + i].resize_with(child_count[i] as usize, || {
                 let child = child_index;
@@ -681,13 +698,13 @@ impl SplatGetter for CsplatArray {
 
     fn get_label(&mut self, base: usize, count: usize, out: &mut [u32]) {
         for i in 0..count {
-            out[i] = self.get(base + i).label() as u32;
+            out[i] = self.get(base + i).label();
         }
     }
 
     fn get_instance_label(&mut self, base: usize, count: usize, out: &mut [u32]) {
         for i in 0..count {
-            out[i] = self.get(base + i).instance_label() as u32;
+            out[i] = self.get(base + i).instance_label();
         }
     }
 

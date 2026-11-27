@@ -23,7 +23,8 @@ export class SplatRaycastBlocks {
   }
 
   private refresh(pager: SplatPager) {
-    const index = this.index ??= new RaycastBlockIndex(pager.maxSplats);
+    this.index ??= new RaycastBlockIndex(pager.maxSplats);
+    const index = this.index;
     for (const [page, bounds] of this.pendingPages) {
       index.install_page(page, bounds);
     }

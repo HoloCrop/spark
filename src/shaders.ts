@@ -13,8 +13,7 @@ let shaders: Record<string, string> | null = null;
 
 export function getShaders(): Record<string, string> {
   if (!shaders) {
-    // @ts-ignore
-    THREE.ShaderChunk.splatDefines = `${splatDefines}\n${gaussianKernel}`;
+    Object.assign(THREE.ShaderChunk, { splatDefines: `${splatDefines}\n${gaussianKernel}` });
     shaders = {
       splatVertex,
       splatFragment,

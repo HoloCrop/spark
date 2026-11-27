@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { FullScreenQuad } from "three/addons/postprocessing/Pass.js";
 import { Readback } from "./Readback";
-import { SplatEdit } from "./SplatEdit";
+import { type SplatEdit, isSplatEdit } from "./SplatEdit";
 import {
   type CovSplatGenerator,
   type GsplatGenerator,
@@ -322,9 +322,6 @@ export class SplatAccumulator {
               );
               roots.push(output);
             }
-            if (!generator) {
-              throw new Error("Generator must be provided");
-            }
           }
           if (generator) {
             const outputDepth = outputSplatDepth(
@@ -453,7 +450,7 @@ export class SplatAccumulator {
   prepareGenerate({
     renderer,
     scene,
-    time,
+    timer,
     camera,
     sortRadial,
     renderSize,
@@ -462,7 +459,7 @@ export class SplatAccumulator {
   }: {
     renderer: THREE.WebGLRenderer;
     scene: THREE.Scene;
-    time: number;
+    timer: THREE.Timer;
     camera: THREE.Camera;
     sortRadial: boolean;
     renderSize: THREE.Vector2;
@@ -479,8 +476,8 @@ export class SplatAccumulator {
     SplatAccumulator.viewDirUniform.value.copy(this.viewDirection);
     SplatAccumulator.sortRadialUniform.value = sortRadial;
 
-    this.time = time;
-    this.deltaTime = time - previous.time;
+    this.time = timer.getElapsed();
+    this.deltaTime = timer.getDelta();
 
     const allGenerators: SplatGenerator[] = [];
     const residentGenerators: SplatGenerator[] = [];
@@ -495,7 +492,7 @@ export class SplatAccumulator {
 
     const globalEditsSet = new Set<SplatEdit>();
     scene.traverseVisible((node) => {
-      if (node instanceof SplatEdit) {
+      if (isSplatEdit(node)) {
         let ancestor = node.parent;
         while (ancestor != null && !(ancestor instanceof SplatMesh)) {
           ancestor = ancestor.parent;
@@ -639,7 +636,7 @@ export class SplatAccumulator {
               },
               statements: ({ inputs, outputs }) => {
                 if (this.extSplats) {
-                  return unindentLines(`
+                  return unindentLines(/* glsl */ `
                     int indexDiv8 = ${inputs.index} >> 3;
                     ivec3 coord = splatTexCoord(indexDiv8);
                     uvec4 packedData;
@@ -657,7 +654,7 @@ export class SplatAccumulator {
                     ${outputs.rgba8} = uintToVec4(data);
                   `);
                 }
-                return unindentLines(`
+                return unindentLines(/* glsl */ `
                   int indexDiv4 = ${inputs.index} >> 2;
                   ivec3 coord = splatTexCoord(indexDiv4);
                   uvec4 packedData = texelFetch(${inputs.extSplats1}, coord, 0);
@@ -707,5 +704,12 @@ export class SplatAccumulator {
       return item.version !== otherMapping[i].version;
     });
     return { splatsUpdated, mappingUpdated };
+  }
+
+  // True when a mesh changed its mapping after this accumulator was generated.
+  mappingChanged() {
+    return this.mapping.some(
+      ({ node, mappingVersion }) => node.mappingVersion !== mappingVersion,
+    );
   }
 }

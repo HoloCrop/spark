@@ -328,6 +328,18 @@ export function newArray<T>(
   return new Array(n).fill(null).map((_, i) => initFunction(i));
 }
 
+// Remove every element matching predicate from the array, in place, keeping
+// the remaining elements in order
+export function removeWhere<T>(array: T[], predicate: (item: T) => boolean) {
+  let kept = 0;
+  for (const item of array) {
+    if (!predicate(item)) {
+      array[kept++] = item;
+    }
+  }
+  array.length = kept;
+}
+
 // A free list that has a pool of items of type T, with callbacks
 // for constructing, disposing, and checking if an item is valid for the given args.
 export class FreeList<T, Args> {
@@ -706,8 +718,11 @@ export function setPackedSplatOpacity(
   packedSplats: Uint32Array,
   index: number,
   opacity: number,
+  encoding?: {
+    lodOpacity?: boolean;
+  },
 ) {
-  const uA = floatToUint8(opacity);
+  const uA = floatToUint8(encoding?.lodOpacity ? 0.5 * opacity : opacity);
 
   const i4 = index * 4;
   packedSplats[i4] = (packedSplats[i4] & 0x00ffffff) | (uA << 24);
@@ -926,16 +941,6 @@ export function pixelsToPngUrl(
   return canvas.toDataURL("image/png");
 }
 
-// Manually clone a THREE.Clock object.
-export function cloneClock(clock: THREE.Clock): THREE.Clock {
-  const newClock = new THREE.Clock(clock.autoStart);
-  newClock.startTime = clock.startTime;
-  newClock.oldTime = clock.oldTime;
-  newClock.elapsedTime = clock.elapsedTime;
-  newClock.running = clock.running;
-  return newClock;
-}
-
 // Utility to filter out an undefined values from an object.
 export function omitUndefined<T extends object>(obj: T): Partial<T> {
   return Object.fromEntries(
@@ -944,7 +949,7 @@ export function omitUndefined<T extends object>(obj: T): Partial<T> {
 }
 
 // "Identity" vertex shader that just passes through the position.
-export const IDENT_VERTEX_SHADER = unindent(`
+export const IDENT_VERTEX_SHADER = unindent(/* glsl */ `
   precision highp float;
 
   in vec3 position;
@@ -1498,7 +1503,7 @@ export function encodeExtRgb(r: number, g: number, b: number): number {
   const ag = Math.abs(g);
   const ab = Math.abs(b);
   const maxAbs = Math.max(ar, ag, ab);
-  const base = Math.floor(Math.log2(maxAbs));
+  const base = Math.ceil(Math.log2(maxAbs));
   const biasedBase = Math.max(0, Math.min(31, base + 15));
   const divisor = 2 ** (biasedBase - 15) / 255;
   const uR = Math.round(Math.max(0, Math.min(255, ar / divisor)));

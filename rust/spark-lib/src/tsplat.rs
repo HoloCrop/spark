@@ -206,7 +206,7 @@ pub fn similarity_metric(a: &impl Tsplat, b: &impl Tsplat) -> f32 {
 
 pub fn similarity_metric_with_moments(a: &impl Tsplat, b: &impl Tsplat, moment_factor: f32) -> f32 {
     let spatial = (-moment_matched_distance(a, b, moment_factor)).exp();
-    if a.label() != a.label() {
+    if a.label() != b.label() {
         return 0.0
     }
     if a.label() == b.label() && a.instance_label() != b.instance_label() {

@@ -5,8 +5,33 @@ import { ExtSplats, PackedSplats, SplatMesh, SplatPager, PagedSplats, SplatFileT
 import { initialization } from "../src/wasm";
 import { preparePagedExtResult, preparePagedPackedResult } from "../src/PagedSplatDecode";
 import { DEFAULT_SPLAT_ENCODING } from "../src/defines";
+import { extsplats_to_gsplatarray, packedsplats_to_gsplatarray } from "spark-rs";
 
 await initialization;
+
+for (const Source of [PackedSplats, ExtSplats]) {
+  test(`${Source.name} keeps semantic arrays through native batches past the first chunk`, () => {
+    const count = 65539;
+    const labels = Uint32Array.from({ length: count }, (_, index) => index % 17);
+    const instances = Uint32Array.from({ length: count }, (_, index) => index + 100);
+    const splats = new Source({ maxSplats: count });
+    const center = new THREE.Vector3();
+    const scale = new THREE.Vector3(0.1, 0.1, 0.1);
+    const rotation = new THREE.Quaternion();
+    const color = new THREE.Color(1, 1, 1);
+    for (let index = 0; index < count; index++) {
+      splats.setSplat(index, center, scale, rotation, 0.8, color);
+    }
+    const native = splats instanceof ExtSplats
+      ? extsplats_to_gsplatarray(count, splats.extArrays[0], splats.extArrays[1], { labels, instances })
+      : packedsplats_to_gsplatarray(count, splats.packedArray, { labels, instances }, DEFAULT_SPLAT_ENCODING);
+    const result = native.to_extsplats() as { labels: Uint32Array; instances: Uint32Array };
+    assert.deepEqual(result.labels.subarray(0, count), labels);
+    assert.deepEqual(result.instances.subarray(0, count), instances);
+    native.free();
+    splats.dispose();
+  });
+}
 
 for (const Source of [PackedSplats, ExtSplats]) {
   test(`${Source.name} keeps hit identity through filtering, chunks, and LoD remapping`, () => {
@@ -50,8 +75,8 @@ for (const ext of [false, true]) {
   test(`paged ${ext ? "extended" : "packed"} block cache follows uploads, visibility and display indices`, () => {
     // GPU uploads are irrelevant to this CPU picking integration test.
     const renderer = { initTexture() {} } as THREE.WebGLRenderer;
-    const pager = new SplatPager({renderer, extSplats: ext, maxSplats: 65536, autoDrive: false});
-    const paged = new PagedSplats({pager, fileType: SplatFileType.PLY});
+    const pager = new SplatPager({renderer, extSplats: ext, maxSplats: 65536, autoDrive: false, onUpdate() {}});
+    const paged = new PagedSplats({pager, fileType: SplatFileType.PLY, fileBytes: new Uint8Array()});
     pager.pageToSplatsChunk[0] = {splats: paged, chunk: 0, time: 0};
     const mesh = new SplatMesh({paged});
     const splats = ext ? new ExtSplats({maxSplats: 128}) : new PackedSplats({maxSplats: 128});

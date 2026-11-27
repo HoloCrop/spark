@@ -477,7 +477,7 @@ pub fn chunk_tree_size<TA: TsplatArray>(splats: &mut TA, root: usize, logger: im
             log::debug!("octant lengths: {:?}", octants.iter().map(|o| o.len()).collect::<Vec<usize>>());
             
             // Resort into Hilbert order
-            let mut octants = octants.into_iter().map(|o| Some(o)).collect::<Vec<_>>();
+            let mut octants = octants.into_iter().map(Some).collect::<Vec<_>>();
             let octants = [0, 1, 3, 2, 6, 7, 5, 4].map(|i| octants[i].take().unwrap());
             for batch in octants {
                 batches.push_back(batch);
@@ -638,7 +638,7 @@ pub fn chunk_tree_morton<TA: TsplatArray>(splats: &mut TA, root: usize, logger: 
             log::debug!("octant lengths: {:?}", octants.iter().map(|o| o.len()).collect::<Vec<usize>>());
             
             // Resort into Hilbert order
-            let mut octants = octants.into_iter().map(|o| Some(o)).collect::<Vec<_>>();
+            let mut octants = octants.into_iter().map(Some).collect::<Vec<_>>();
             let octants = [0, 1, 3, 2, 6, 7, 5, 4].map(|i| octants[i].take().unwrap());
             for batch in octants {
                 batches.push_back(batch);
@@ -651,5 +651,9 @@ pub fn chunk_tree_morton<TA: TsplatArray>(splats: &mut TA, root: usize, logger: 
 }
 
 pub fn chunk_tree<TA: TsplatArray>(splats: &mut TA, root: usize, logger: impl Fn(&str)) {
+    if splats.len() == 0 {
+        return;
+    }
+
     chunk_tree_size(splats, root, logger);
 }

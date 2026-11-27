@@ -61,8 +61,8 @@ mod py_build_lod {
     fn encode_rad(input_file: &str, output_dir: &str) -> PyResult<()> {
         let splats: GsplatArray = GsplatArray::new();
 
-        let mut decoder = MultiDecoder::new(splats, None, Some(&input_file));
-        let mut splats = match read_file_chunks(&input_file, &mut decoder) {
+        let mut decoder = MultiDecoder::new(splats, None, Some(input_file));
+        let mut splats = match read_file_chunks(input_file, &mut decoder) {
             Ok(_) => {
                 println!("Detected file type: {:?}", decoder.file_type.unwrap());
                 decoder.into_splats()

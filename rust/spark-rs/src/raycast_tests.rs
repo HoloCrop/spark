@@ -10,6 +10,18 @@ fn hit(origin: [f32; 3], direction: [f32; 3], scale: [f32; 3], opacity: f32, min
 }
 
 #[test]
+fn tiny_distant_splat_keeps_its_surface_profile() {
+    // Preserve upstream's distant-hit cancellation regression with our profile contract.
+    let center = [1000.0_f32, 0.0, 1000.0];
+    let distance = 2000000.0_f32.sqrt();
+    let direction = [center[0] / distance, 0.0, center[2] / distance];
+    let profile = raycast_gaussian([0.0; 3], direction, 1.0, center,
+        [0.005; 3], IDENTITY, 0.0, None).unwrap();
+    assert!((profile.depth - distance).abs() < 0.01);
+    assert!(profile.alpha > 0.9);
+}
+
+#[test]
 fn quartic_edges_hit_at_density_peak_and_stop_at_support() {
     for offset in [1.2, 1.6] {
         assert_eq!(hit([offset, 0.0, -10.0], [0.0, 0.0, 1.0], [1.0; 3], 1.0, 0.0), Some(10.0));
@@ -216,7 +228,7 @@ fn profiles_wholly_behind_origin_do_not_hide_foreground_surface() {
     assert_eq!(profiles.len(), 3);
     assert_eq!(profiles[0], 10.0);
     let depth = crate::sample_surface_depth(&profiles, 0.0, 20.0).unwrap();
-    assert!((depth - 9.9136773).abs() < 2e-5);
+    assert!((f64::from(depth) - 9.9136773).abs() < 2e-5);
 }
 
 #[test]

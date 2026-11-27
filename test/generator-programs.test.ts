@@ -136,7 +136,7 @@ test("scene preparation keeps hidden and layer-excluded residents but retires re
   const excludedProgram = accumulator.prepareProgramMaterial(excluded.generator);
   const prepare = () => accumulator.prepareGenerate({
     renderer: {} as THREE.WebGLRenderer,
-    scene, camera, previous, time: 0, sortRadial: false, renderSize: new THREE.Vector2(1, 1),
+    scene, camera, previous, timer: new THREE.Timer(), sortRadial: false, renderSize: new THREE.Vector2(1, 1),
   });
   prepare();
   assert.equal(accumulator.prepareProgramMaterial(hidden.generator).program, hiddenProgram.program);

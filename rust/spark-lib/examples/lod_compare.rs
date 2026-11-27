@@ -27,7 +27,7 @@ fn main() -> anyhow::Result<()> {
     encoder.resolve_encoding();
     {
         let name = method;
-        let directory = Path::new(&args[2]).join(&name);
+        let directory = Path::new(&args[2]).join(name);
         fs::create_dir_all(&directory)?;
         let mut header = Vec::new();
         let chunks = encoder.encode_with_chunks(&mut header, "bay-lod-")?;

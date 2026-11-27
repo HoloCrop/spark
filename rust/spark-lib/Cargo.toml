@@ -7,30 +7,44 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[features]
+default = ["antisplat", "ksplat", "ply", "rad", "sogs", "spz", "csplat", "gsplat", "tiny_lod", "bhatt_lod"]
+antisplat = []
+ksplat = []
+ply = []
+rad = ["dep:flate2", "dep:ruzstd"]
+native-zstd = ["rad", "dep:zstd"]
+parallel = ["dep:rayon"]
+trained_lod = ["rad", "gsplat", "ply", "dep:zip"]
+sogs = ["dep:zip", "dep:image"]
+spz = ["dep:flate2", "dep:ruzstd"]
+csplat = []
+gsplat = []
+quick_lod = ["gsplat"]
+tiny_lod = []
+bhatt_lod = []
+
 [dependencies]
-ruzstd = "0.8"
 zstd = { version = "0.13", optional = true }
 rayon = { version = "1.11", optional = true }
+log = "0.4.32"
+strum_macros = "0.28.0"
 ahash.workspace = true
 anyhow.workspace = true
 glam.workspace = true
 half.workspace = true
 ordered-float.workspace = true
-miniz_oxide.workspace = true
+flate2 = { workspace = true, optional = true }
+ruzstd = { workspace = true, optional = true }
 serde.workspace = true
 smallvec.workspace = true
 itertools.workspace = true
 serde_json.workspace = true
-zip.workspace = true
-image.workspace = true
+zip = { workspace = true, optional = true }
+image = { workspace = true, optional = true }
 hnsw.workspace = true
 rand_pcg.workspace = true
 space.workspace = true
-log = "0.4.32"
-env_logger = "0.11.10"
-serde_path_to_error = "0.1.20"
-strum_macros = "0.28.0"
 
-[features]
-native-zstd = ["dep:zstd"]
-parallel = ["dep:rayon"]
+[lints]
+workspace = true

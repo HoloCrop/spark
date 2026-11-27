@@ -13,7 +13,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = "0.29.0"
-spark-lib = { path = "../spark-lib", features = ["parallel", "native-zstd"] }
+spark-lib = { path = "../spark-lib", features = ["parallel", "native-zstd", "trained_lod"] }
 serde_json.workspace = true
 anyhow.workspace = true
 
